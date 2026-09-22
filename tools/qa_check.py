@@ -311,16 +311,21 @@ def badging_checks(
                 package.group(3),
             )
 
-    min_sdk = re.search(r"sdkVersion:'(\d+)'", out)
+    min_sdk = re.search(r"(?:min)?sdkVersion:'(\d+)'", out)
     target_sdk = re.search(r"targetSdkVersion:'(\d+)'", out)
     if min_sdk:
         check(int(min_sdk.group(1)) == EXPECTED_MIN_SDK, f"minSdkVersion = {EXPECTED_MIN_SDK}", min_sdk.group(1))
+    else:
+        # 检查静默跳过比检查失败更危险
+        add(WARN, "未能从 badging 解析 minSdkVersion", "n/a")
     if target_sdk:
         check(
             int(target_sdk.group(1)) == EXPECTED_TARGET_SDK,
             f"targetSdkVersion = {EXPECTED_TARGET_SDK}",
             target_sdk.group(1),
         )
+    else:
+        add(WARN, "未能从 badging 解析 targetSdkVersion", "n/a")
 
     permissions = re.findall(r"uses-permission: name='([^']+)'", out)
     unexpected = [name for name in permissions if not name.endswith(SELF_PERMISSION_SUFFIX)]
