@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!--
+        被分享出去的副本都放在 cacheDir/shared/<session>/<新文件名>，
+        这样 ContentProvider 对外报出的 DISPLAY_NAME 就是磁盘上的真实文件名，
+        不需要再写一个自定义 Provider 去伪造名字。
+    -->
+    <cache-path
+        name="shared"
+        path="shared/" />
+</paths>

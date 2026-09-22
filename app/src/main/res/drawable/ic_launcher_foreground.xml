@@ -1,0 +1,18 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 文档 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M38,26 h20 l14,14 v42 a4,4 0 0 1 -4,4 h-30 a4,4 0 0 1 -4,-4 v-52 a4,4 0 0 1 4,-4 z" />
+    <!-- 折角 -->
+    <path
+        android:fillColor="#FFB3D4FF"
+        android:pathData="M58,26 l14,14 h-14 z" />
+    <!-- 重命名箭头 -->
+    <path
+        android:fillColor="#FF1565C0"
+        android:pathData="M44,52 h16 v-5 l10,9 -10,9 v-5 h-16 z" />
+</vector>
