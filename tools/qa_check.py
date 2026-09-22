@@ -288,6 +288,18 @@ def manifest_checks(aapt2: str, apk: str, expected_authority: str) -> None:
 # --------------------------------------------------------------------------- badging
 
 
+def badging_value(out: str, *keys: str) -> str | None:
+    """从 aapt2 dump badging 的输出里取一行形如 `key:'value'` 的值
+    （按行首匹配，避免 minSdkVersion 误匹配到 targetSdkVersion）。"""
+    for line in out.splitlines():
+        stripped = line.strip()
+        for key in keys:
+            prefix = f"{key}:'"
+            if stripped.startswith(prefix):
+                return stripped[len(prefix):].rstrip("'")
+    return None
+
+
 def badging_checks(
     aapt2: str,
     apk: str,
@@ -311,18 +323,19 @@ def badging_checks(
                 package.group(3),
             )
 
-    min_sdk = re.search(r"(?:min)?sdkVersion:'(\d+)'", out)
-    target_sdk = re.search(r"targetSdkVersion:'(\d+)'", out)
-    if min_sdk:
-        check(int(min_sdk.group(1)) == EXPECTED_MIN_SDK, f"minSdkVersion = {EXPECTED_MIN_SDK}", min_sdk.group(1))
+    min_sdk = badging_value(out, "minSdkVersion", "sdkVersion")
+    target_sdk = badging_value(out, "targetSdkVersion")
+    add(INFO, "badging sdk 行", f"minSdk={min_sdk} targetSdk={target_sdk}")
+    if min_sdk is not None:
+        check(int(min_sdk) == EXPECTED_MIN_SDK, f"minSdkVersion = {EXPECTED_MIN_SDK}", min_sdk)
     else:
         # 检查静默跳过比检查失败更危险
         add(WARN, "未能从 badging 解析 minSdkVersion", "n/a")
-    if target_sdk:
+    if target_sdk is not None:
         check(
-            int(target_sdk.group(1)) == EXPECTED_TARGET_SDK,
+            int(target_sdk) == EXPECTED_TARGET_SDK,
             f"targetSdkVersion = {EXPECTED_TARGET_SDK}",
-            target_sdk.group(1),
+            target_sdk,
         )
     else:
         add(WARN, "未能从 badging 解析 targetSdkVersion", "n/a")
