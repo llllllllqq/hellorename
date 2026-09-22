@@ -24,3 +24,7 @@ keystore.b64
 *.iml
 *.hprof
 .DS_Store
+
+# ---- python 工具 -追 ----
+__pycache__/
+*.pyc
