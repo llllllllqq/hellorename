@@ -71,16 +71,18 @@ jobs:
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
         run: |
+          # QA 构建用 .debug 后缀的 applicationId，避免和正式包抢同一个包名
           gradle --no-daemon --stacktrace assembleRelease \
             -PversionName="0.0.1-dev.${GITHUB_RUN_NUMBER}" \
-            -PversionCode="${GITHUB_RUN_NUMBER}"
+            -PversionCode="${GITHUB_RUN_NUMBER}" \
+            -PapplicationIdSuffix=.debug
 
       - name: QA check APK
         env:
           CERT: ${{ steps.keystore.outputs.cert }}
         run: |
           set -e
-          ARGS="--expect-version-name 0.0.1-dev.${GITHUB_RUN_NUMBER}"
+          ARGS="--expect-package moe.hellorename.debug --expect-version-name 0.0.1-dev.${GITHUB_RUN_NUMBER}"
           if [ -n "$CERT" ]; then
             ARGS="$ARGS --expect-cert-sha256 $CERT"
           else

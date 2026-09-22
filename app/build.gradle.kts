@@ -30,16 +30,18 @@ val sigKeyPassword = secret("keyPassword", "SIGNING_KEY_PASSWORD")
 val hasReleaseSigning = sigStoreFile != null && sigStorePassword != null &&
     sigKeyAlias != null && sigKeyPassword != null
 
-// 版本号可由 CI 覆盖：-PversionName=1.2.3 -PversionCode=42
+// 版本号 / applicationId 可由 CI 覆盖：
+//   -PversionName=1.2.3 -PversionCode=42 [-PapplicationIdSuffix=.debug]
 val appVersionName = (project.findProperty("versionName") as String?)?.takeIf { it.isNotBlank() } ?: "1.0.1"
 val appVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 2
+val appIdSuffix = (project.findProperty("applicationIdSuffix") as String?)?.takeIf { it.isNotBlank() } ?: ""
 
 android {
     namespace = "moe.hellorename"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "moe.hellorename"
+        applicationId = "moe.hellorename$appIdSuffix"
         minSdk = 24
         targetSdk = 34
         versionCode = appVersionCode
@@ -53,6 +55,11 @@ android {
                 storePassword = sigStorePassword
                 keyAlias = sigKeyAlias
                 keyPassword = sigKeyPassword
+                // minSdk 24 ⇒ v1(JAR) 不需要；v2 必需，v3 顺手开上（支持日后换签名密钥）
+                enableV1Signing = false
+                enableV2Signing = true
+                enableV3Signing = true
+                enableV4Signing = false
             }
         }
     }

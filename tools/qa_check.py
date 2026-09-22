@@ -26,9 +26,12 @@ import zipfile
 EXPECTED_PACKAGE = "moe.hellorename"
 EXPECTED_MIN_SDK = 24
 EXPECTED_TARGET_SDK = 34
-EXPECTED_ACTIVITY = "moe.hellorename.MainActivity"
+EXPECTED_ACTIVITY = "moe.hellorename.MainActivity"   # namespace 决定，不随 applicationIdSuffix 变
 EXPECTED_PROVIDER = "androidx.core.content.FileProvider"
-EXPECTED_AUTHORITY = "moe.hellorename.fileprovider"
+# androidx.core 会用 App 自己的 applicationId 声明一个 signature 级权限用于
+# ContextCompat.registerReceiver(RECEIVER_NOT_EXPORTED)；它不向任何外部应用授权，
+# 也不会出现在安装界面的权限列表里，因此是有意保留的。
+SELF_PERMISSION_SUFFIX = ".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
 FORBIDDEN_ENTRIES = re.compile(
     r"(^|/)(keystore\.properties|local\.properties)$|\.(jks|keystore|p12|pepk)$"
 )
@@ -150,6 +153,16 @@ def attr_bool(value: str | None) -> bool | None:
     return None
 
 
+def attr_enum_is(value: str | None, expected: int) -> bool:
+    """aapt2 可能输出 `1`、`0x1` 或 `(type 0x10)0x1`，缺省值则完全不带该属性。"""
+    if value is None:
+        return True
+    text = value.strip()
+    if text == str(expected):
+        return True
+    return bool(re.search(rf"0x{expected:x}$", text))
+
+
 def attr_str(value: str | None) -> str:
     if value is None:
         return ""
@@ -168,7 +181,7 @@ def find_children(node: dict, tag: str) -> list[dict]:
     return [c for c in node.get("children", []) if c["tag"] == tag]
 
 
-def manifest_checks(aapt2: str, apk: str) -> None:
+def manifest_checks(aapt2: str, apk: str, expected_authority: str) -> None:
     tree = manifest_tree(aapt2, apk)
     if tree is None:
         return
@@ -182,10 +195,23 @@ def manifest_checks(aapt2: str, apk: str) -> None:
         "release 包不可调试 (debuggable=false)",
         f"debuggable={app['attrs'].get('debuggable')}",
     )
-    check(
-        not find_children(tree, "uses-permission"),
-        "manifest 未声明任何 uses-permission",
-    )
+
+    # ---- 权限 ----
+    used = [attr_str(n["attrs"].get("name")) for n in find_children(tree, "uses-permission")]
+    unexpected = [name for name in used if not name.endswith(SELF_PERMISSION_SUFFIX)]
+    check(not unexpected, "没有多余的权限申请", ", ".join(unexpected))
+    if used:
+        add(INFO, "声明的权限", ", ".join(used))
+    declared = {attr_str(n["attrs"].get("name")): n for n in find_children(tree, "permission")}
+    for name in used:
+        if name.endswith(SELF_PERMISSION_SUFFIX):
+            node = declared.get(name)
+            level = node["attrs"].get("protectionLevel") if node else None
+            check(
+                level is not None and ("0x2" in level or "0x12" in level),
+                "自用权限 protectionLevel=signature（不对外授予）",
+                str(level),
+            )
 
     # ---- activity ----
     activity = None
@@ -201,7 +227,7 @@ def manifest_checks(aapt2: str, apk: str) -> None:
         )
         launch_mode = activity["attrs"].get("launchMode")
         check(
-            launch_mode is None or "0x1" in launch_mode or "singleTop" in launch_mode,
+            attr_enum_is(launch_mode, 1),
             "MainActivity launchMode=singleTop",
             str(launch_mode),
         )
@@ -220,10 +246,10 @@ def manifest_checks(aapt2: str, apk: str) -> None:
     # ---- provider ----
     provider = None
     for node in find_children(app, "provider"):
-        if attr_str(node["attrs"].get("authorities")) == EXPECTED_AUTHORITY:
+        if attr_str(node["attrs"].get("authorities")) == expected_authority:
             provider = node
             break
-    if check(provider is not None, f"存在 FileProvider({EXPECTED_AUTHORITY})"):
+    if check(provider is not None, f"存在 FileProvider({expected_authority})"):
         assert provider is not None
         check(
             attr_str(provider["attrs"].get("name")) == EXPECTED_PROVIDER,
@@ -248,7 +274,12 @@ def manifest_checks(aapt2: str, apk: str) -> None:
 # --------------------------------------------------------------------------- badging
 
 
-def badging_checks(aapt2: str, apk: str, expect_version_name: str | None) -> None:
+def badging_checks(
+    aapt2: str,
+    apk: str,
+    expect_version_name: str | None,
+    expect_package: str,
+) -> None:
     code, out, err = run([aapt2, "dump", "badging", apk])
     if code != 0:
         add(FAIL, "aapt2 dump badging", (err or out).strip()[:400])
@@ -257,7 +288,7 @@ def badging_checks(aapt2: str, apk: str, expect_version_name: str | None) -> Non
     package = re.search(r"package: name='([^']+)' versionCode='([^']*)' versionName='([^']*)'", out)
     if check(package is not None, "能解析 badging 的 package 行"):
         assert package is not None
-        check(package.group(1) == EXPECTED_PACKAGE, f"包名 = {EXPECTED_PACKAGE}", package.group(1))
+        check(package.group(1) == expect_package, f"包名 = {expect_package}", package.group(1))
         add(INFO, "versionCode / versionName", f"{package.group(2)} / {package.group(3)}")
         if expect_version_name:
             check(
@@ -278,10 +309,11 @@ def badging_checks(aapt2: str, apk: str, expect_version_name: str | None) -> Non
         )
 
     permissions = re.findall(r"uses-permission: name='([^']+)'", out)
+    unexpected = [name for name in permissions if not name.endswith(SELF_PERMISSION_SUFFIX)]
     check(
-        not permissions,
-        "零权限（APK 未声明任何 uses-permission）",
-        "实际声明了: " + ", ".join(permissions),
+        not unexpected,
+        "没有多余的权限申请（如 INTERNET / 存储 等）",
+        "实际声明了: " + ", ".join(unexpected),
     )
 
     check("application-debuggable" not in out, "badging 里没有 application-debuggable")
@@ -303,9 +335,20 @@ def signature_checks(
     text = out + err
     check(code == 0, "apksigner verify 通过", text.strip()[:400])
 
-    schemes = re.findall(r"Verified using v(\d) scheme[^:]*: (true|false)", text)
-    for version, verified in schemes:
-        check(verified == "true", f"APK Signature Scheme v{version} 校验通过", warn_only=(version == "1"))
+    schemes = dict(re.findall(r"Verified using v(\d) scheme[^:]*: (true|false)", text))
+    check(
+        schemes.get("2") == "true",
+        "APK Signature Scheme v2 校验通过（minSdk 24 必需）",
+        f"v2={schemes.get('2')}",
+    )
+    check(
+        schemes.get("3") == "true",
+        "APK Signature Scheme v3 校验通过（支持未来换签名密钥）",
+        f"v3={schemes.get('3')}",
+    )
+    for version in ("1", "4"):
+        if version in schemes:
+            add(INFO, f"Signature Scheme v{version}", schemes[version])
 
     digests = re.findall(r"certificate SHA-256 digest:\s*([0-9a-fA-F:]+)", text)
     if check(bool(digests), "能读到签名证书 SHA-256"):
@@ -366,6 +409,7 @@ def report(apk: str, summary_file: str | None) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("apk")
+    parser.add_argument("--expect-package", default=EXPECTED_PACKAGE)
     parser.add_argument("--expect-cert-sha256", default=None)
     parser.add_argument("--expect-version-name", default=None)
     parser.add_argument("--allow-debug-cert", action="store_true")
@@ -390,10 +434,11 @@ def main() -> int:
 
     zip_checks(args.apk)
 
+    expected_authority = f"{args.expect_package}.fileprovider"
     aapt2 = tool(build_tools, "aapt2")
     if aapt2:
-        badging_checks(aapt2, args.apk, args.expect_version_name)
-        manifest_checks(aapt2, args.apk)
+        badging_checks(aapt2, args.apk, args.expect_version_name, args.expect_package)
+        manifest_checks(aapt2, args.apk, expected_authority)
     else:
         add(WARN, "未找到 aapt2", "跳过 manifest / badging 检查")
 

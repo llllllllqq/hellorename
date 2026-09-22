@@ -62,7 +62,7 @@ hellorename 就是干这件事的：
 
 ### 云端（推荐，本仓库就是这么发的包）
 
-- 推到 `main` / 开 PR → `QA` workflow：单元测试 → Lint 门禁 → 构建 release APK → APK 出厂体检。
+- 推到 `main` / 开 PR → `QA` workflow：单元测试 → Lint 门禁 → 构建 release APK → APK 出厂体检。QA 产物带 `.debug` 包名后缀（`moe.hellorename.debug`），可以和正式包同时装在手机上。
 - 打 `v*` tag → `Release APK` workflow：要求签名 Secrets → 构建 → 体检 → 创建 Release（附 APK 与 `SHA256SUMS.txt`，说明自动取自 `CHANGELOG.md`）。
 
 ### 出厂前自动体检（`tools/qa_check.py`）
@@ -70,11 +70,11 @@ hellorename 就是干这件事的：
 每次 CI 都会对产出的 APK 做一遍硬性检查，任何一项失败就不发版：
 
 - 包名 `moe.hellorename`、版本号与 tag 一致、`minSdk 24`、`targetSdk 34`
-- **零 `uses-permission`**（本项目不需要任何权限，多出权限即失败）
+- 除了 androidx 自用的 `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`（`signature` 级、不向外部应用授权）外**没有任何权限**，一旦多出 `INTERNET`/存储之类就失败
 - `application-debuggable` 不存在
 - `MainActivity` `exported=true`，注册了 `MAIN/LAUNCHER`、`SEND`、`SEND_MULTIPLE`，`launchMode=singleTop`
 - `FileProvider` `exported=false` + `grantUriPermissions=true` + authority 与 `file_paths.xml` 到位
-- APK Signature v2 校验通过，且证书 SHA-256 等于发布密钥（不是 Android Debug 证书）
+- APK Signature v2 / v3 校验通过，且证书 SHA-256 等于发布密钥（不是 Android Debug 证书）
 - APK 内不得残留 `*.jks / keystore.properties / local.properties`
 
 本地也能跑：
@@ -125,8 +125,8 @@ gradle test          # FileNameUtils 的纯逻辑测试
 
 ## 隐私
 
-- 不申请任何 Android 权限，没有网络代码。
-- 文件只在本地缓存目录里复制、改名，除了你自己选的目标 App，不会发给任何第三方。
+- 没有网络代码，也没有申请任何系统权限（`INTERNET`、存储、悬浮窗等一概没有）。APK 里只剩 androidx 自带的 `moe.hellorename.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`，它是 `signature` 级的应用内自用权限，不会授予外部应用，也不出现在安装权限列表里。
+- 文件只在本地缓存目录里复制、改名；除了你自己选的目标 App，不会发给任何第三方。
 
 ## 已知限制
 
