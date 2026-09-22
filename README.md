@@ -27,7 +27,7 @@ hellorename 就是干这件事的：
 
 | 决策 | 原因 |
 | --- | --- |
-| 标准前台 Activity，**不用悬浮窗、不占通知、不要任何权限** | 悬浮窗在国产 ROM 上要额外授权、易被拦截；`SYSTEM_ALERT_WINDOW` 权限一旦被回收功能就废了。前台 Activity 走系统分享入口，行为最可预期。 |
+| 标准前台 Activity，**不用悬浮窗、不占通知、不申请任何系统权限** | 悬浮窗在国产 ROM 上要额外授权、易被拦截；`SYSTEM_ALERT_WINDOW` 权限一旦被回收功能就废了。前台 Activity 走系统分享入口，行为最可预期。 |
 | 收到文件后**立刻**复制到 `cacheDir/shared/<会话>/_incoming.<ext>` | 源 URI 的读授权是**一次性的、不可传递**的，且源 App 随时可能被系统杀掉。越早复制越可靠，之后改名、分享都不再依赖源 App。 |
 | 改名时只是**同目录 rename**，不再复制第二份 | 一份数据从头到尾只存在一份：`_incoming.png` → `我的新名字.png` 是同一文件系统内的瞬时操作，零字节拷贝。 |
 | 用自己的 **FileProvider** 对外提供文件 | `cacheDir/shared/<会话>/<新文件名>` 的**真实磁盘文件名就是对外报出的 `DISPLAY_NAME`**，不需要写自定义 ContentProvider 去伪造名字。 |

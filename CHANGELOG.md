@@ -14,7 +14,7 @@
 ### Added
 - 复制进度反馈：能拿到大小时显示百分比，拿不到时按 MB 显示已复制量。
 - `FileNameUtils` 纯逻辑模块 + 27 个单元测试（非法字符、路径穿越 `../`、超长名、扩展名规范化、点开头文件等）。
-- `tools/qa_check.py`：APK 出厂体检（包名/版本、minSdk 24、targetSdk 34、**零权限**、非 debuggable、FileProvider 不导出但可授权、MAIN/SEND/SEND_MULTIPLE 注册、签名方案与证书指纹、APK 内不得有密钥文件）。
+- `tools/qa_check.py`：APK 出厂体检（包名/版本、minSdk 24、targetSdk 34、**无多余权限**（仅 androidx 自用 signature 级）、非 debuggable、FileProvider 不导出但可授权、MAIN/SEND/SEND_MULTIPLE 注册、签名方案与证书指纹、APK 内不得有密钥文件）。
 - `tools/lint_summary.py`：Android Lint 报告摘要，Error/Fatal 作为质量门禁。
 - `tools/changelog_notes.py`：自动用本文件生成 Release notes。
 - QA workflow：单元测试 → lint 门禁 → 构建 release APK → APK 体检。
