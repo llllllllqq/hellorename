@@ -160,7 +160,10 @@ class MainActivity : AppCompatActivity() {
         updateHint()
 
         if (extraCount > 1) {
-            setStatus(getString(R.string.status_multi, extraCount), isError = false)
+            setStatus(
+                resources.getQuantityString(R.plurals.status_multi, extraCount, extraCount),
+                isError = false,
+            )
         } else {
             setStatus(getString(R.string.status_copying), isError = false)
         }

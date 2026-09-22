@@ -163,6 +163,19 @@ def attr_enum_is(value: str | None, expected: int) -> bool:
     return bool(re.search(rf"0x{expected:x}$", text))
 
 
+def attr_int(value: str | None) -> int | None:
+    """解析 aapt2 输出的整数属性，如 `(type 0x10)0x00000002` / `2`。"""
+    if value is None:
+        return None
+    text = value.strip()
+    hex_match = re.search(r"0x([0-9a-fA-F]+)$", text)
+    if hex_match:
+        return int(hex_match.group(1), 16)
+    if text.isdigit():
+        return int(text)
+    return None
+
+
 def attr_str(value: str | None) -> str:
     if value is None:
         return ""
@@ -206,11 +219,12 @@ def manifest_checks(aapt2: str, apk: str, expected_authority: str) -> None:
     for name in used:
         if name.endswith(SELF_PERMISSION_SUFFIX):
             node = declared.get(name)
-            level = node["attrs"].get("protectionLevel") if node else None
+            level = attr_int(node["attrs"].get("protectionLevel")) if node else None
+            # protectionLevel 的 signature 位 = 0x2
             check(
-                level is not None and ("0x2" in level or "0x12" in level),
+                level is not None and (level & 0x2) == 0x2,
                 "自用权限 protectionLevel=signature（不对外授予）",
-                str(level),
+                f"0x{level:08x}" if level is not None else "未解析到",
             )
 
     # ---- activity ----

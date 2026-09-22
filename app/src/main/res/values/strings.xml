@@ -25,6 +25,9 @@
     <string name="status_rename_failed">Rename failed. Please check for illegal characters.</string>
     <string name="status_sent">Handed over to the system share sheet.</string>
     <string name="status_ext_changed">Extension changed — some apps may reject the new type.</string>
-    <string name="status_multi">%1$d files received. This version only handles the first one.</string>
+    <plurals name="status_multi">
+        <item quantity="one">%1$d file received. This version only handles the first one.</item>
+        <item quantity="other">%1$d files received. This version only handles the first one.</item>
+    </plurals>
     <string name="toast_no_share_app">No app can receive this file type.</string>
 </resources>
