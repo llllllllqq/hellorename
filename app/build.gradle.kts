@@ -30,6 +30,10 @@ val sigKeyPassword = secret("keyPassword", "SIGNING_KEY_PASSWORD")
 val hasReleaseSigning = sigStoreFile != null && sigStorePassword != null &&
     sigKeyAlias != null && sigKeyPassword != null
 
+// 版本号可由 CI 覆盖：-PversionName=1.2.3 -PversionCode=42
+val appVersionName = (project.findProperty("versionName") as String?)?.takeIf { it.isNotBlank() } ?: "1.0.1"
+val appVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 2
+
 android {
     namespace = "moe.hellorename"
     compileSdk = 34
@@ -38,8 +42,8 @@ android {
         applicationId = "moe.hellorename"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
     }
 
     signingConfigs {
@@ -101,4 +105,6 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
     implementation("com.google.android.material:material:1.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+
+    testImplementation("junit:junit:4.13.2")
 }

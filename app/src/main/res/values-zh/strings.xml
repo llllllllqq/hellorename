@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">改名助手</string>
+    <string name="chooser_title">分享重命名后的文件</string>
+
+    <string name="label_original_name">原文件名</string>
+    <string name="old_name_none">—（还没有收到文件）—</string>
+    <string name="fallback_name">file</string>
+    <string name="hint_new_name">新文件名</string>
+    <string name="action_send">发送</string>
+    <string name="action_pick">选择一个文件</string>
+    <string name="allow_edit_ext">允许修改扩展名</string>
+
+    <string name="hint_ext_locked">扩展名已锁定，勾选上面的选项即可修改。</string>
+    <string name="hint_ext_unlocked">扩展名可修改，改完会影响分享给对方的文件类型。</string>
+    <string name="hint_no_ext">原文件没有扩展名，无法锁定。</string>
+
+    <string name="status_no_file">还没收到文件。可以从别的应用分享文件过来，或点上面的“选择一个文件”。</string>
+    <string name="status_text_only">收到的是纯文本，不是文件，本应用只能处理文件分享。</string>
+    <string name="status_copying">正在复制文件…</string>
+    <string name="status_copying_percent">正在复制文件… %1$d%%</string>
+    <string name="status_copying_size">正在复制文件… %1$s</string>
+    <string name="status_ready">复制完成，可以改名后发送了。</string>
+    <string name="status_copy_failed">复制失败，点“发送”可重试。</string>
+    <string name="status_rename_failed">重命名失败，请检查文件名是否含有非法字符。</string>
+    <string name="status_sent">已交给系统分享面板。</string>
+    <string name="status_ext_changed">已改扩展名，部分应用可能因类型不符而拒收。</string>
+    <string name="status_multi">收到 %1$d 个文件，本版本只处理第 1 个。</string>
+    <string name="toast_no_share_app">没有找到能接收该类型文件的应用。</string>
+</resources>

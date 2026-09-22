@@ -1,18 +1,16 @@
-name: Build APK
+name: Release APK
 
 on:
   push:
-    branches: [ main ]
     tags: [ 'v*' ]
-  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build release APK
+  release:
+    name: Build & publish release APK
     runs-on: ubuntu-latest
 
     steps:
@@ -30,40 +28,61 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Require signing secrets when building a tag
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Require signing secrets
         env:
           KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
         run: |
           if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "::error::发布 tag 必须配置签名 Secrets，否则会产出 debug 签名的包"
+            echo "::error::发布构建必须配置签名 Secrets（SIGNING_KEYSTORE_BASE64 等），否则会产出 debug 签名的包"
             exit 1
           fi
 
       - name: Decode signing keystore
+        id: keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
         run: |
-          if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "::warning::SIGNING_KEYSTORE_BASE64 未配置，release 将退回 debug 签名"
-            exit 0
-          fi
+          set -e
           printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
-          ls -l "$RUNNER_TEMP/release.jks"
+          DIGEST="$(keytool -list -v -keystore "$RUNNER_TEMP/release.jks" \
+            -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" \
+            | grep -m1 'SHA256:' | awk '{print $2}' | tr -d ':' | tr 'A-Z' 'a-z')"
+          echo "证书 SHA-256: $DIGEST"
+          {
+            echo "cert=$DIGEST"
+            echo "file=$RUNNER_TEMP/release.jks"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve version
+        id: version
+        run: |
+          set -e
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            NAME="${GITHUB_REF_NAME#v}"
+          else
+            NAME="0.0.1-dev.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "构建版本: $NAME (versionCode=${GITHUB_RUN_NUMBER})"
 
       - name: Build release APK
         env:
-          SIGNING_STORE_FILE: ${{ (secrets.SIGNING_KEYSTORE_BASE64 != '' && format('{0}/release.jks', runner.temp)) || '' }}
+          SIGNING_STORE_FILE: ${{ steps.keystore.outputs.file }}
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
-        run: gradle --no-daemon --stacktrace assembleRelease
+        run: |
+          gradle --no-daemon --stacktrace assembleRelease \
+            -PversionName="${{ steps.version.outputs.name }}" \
+            -PversionCode="${GITHUB_RUN_NUMBER}"
 
       - name: Collect APK
         id: collect
         run: |
           set -e
-          VERSION="${GITHUB_REF_NAME}"
+          VERSION="${{ steps.version.outputs.name }}"
           mkdir -p dist
           APK="dist/hellorename-${VERSION}.apk"
           cp app/build/outputs/apk/release/app-release.apk "$APK"
@@ -71,19 +90,17 @@ jobs:
           echo "apk=$APK" >> "$GITHUB_OUTPUT"
           ls -l dist
 
-      - name: Verify APK signature
+      - name: QA check APK
         run: |
-          set -e
-          APK="${{ steps.collect.outputs.apk }}"
-          if [ -z "$ANDROID_HOME" ]; then echo "no ANDROID_HOME, skip"; exit 0; fi
-          BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
-          echo "using $BT"
-          "$BT/apksigner" verify --print-certs "$APK" | head -20
+          python3 tools/qa_check.py "${{ steps.collect.outputs.apk }}" \
+            --expect-version-name "${{ steps.version.outputs.name }}" \
+            --expect-cert-sha256 "${{ steps.keystore.outputs.cert }}" \
+            --summary-file "$GITHUB_STEP_SUMMARY"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v7
         with:
-          name: hellorename-apk-${{ github.ref_name }}
+          name: hellorename-${{ steps.version.outputs.name }}
           path: |
             dist/*.apk
             dist/SHA256SUMS.txt
@@ -93,13 +110,24 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          CERT: ${{ steps.keystore.outputs.cert }}
         run: |
           set -e
-          TAG="${GITHUB_REF_NAME}"
+          python3 tools/changelog_notes.py "$TAG" CHANGELOG.md > "$RUNNER_TEMP/notes.md" || true
+          {
+            cat "$RUNNER_TEMP/notes.md"
+            echo
+            echo "---"
+            echo
+            echo '本包已签名，证书 SHA-256: `'"$CERT"'`'
+            echo
+            echo '校验安装包完整性: `sha256sum -c SHA256SUMS.txt`'
+          } > "$RUNNER_TEMP/release-notes.md"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/*.apk dist/SHA256SUMS.txt --clobber
           else
             gh release create "$TAG" dist/*.apk dist/SHA256SUMS.txt \
               --title "$TAG" \
-              --generate-notes
+              --notes-file "$RUNNER_TEMP/release-notes.md"
           fi

@@ -1,0 +1,103 @@
+name: QA
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qa:
+    name: Test + Lint + APK check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.9'
+
+      - name: Unit tests
+        run: gradle --no-daemon --stacktrace test
+
+      - name: Android Lint
+        run: gradle --no-daemon --stacktrace lintRelease
+
+      - name: Lint gate
+        if: always()
+        run: |
+          python3 tools/lint_summary.py app/build/reports/lint-results-release.xml \
+            --summary-file "$GITHUB_STEP_SUMMARY"
+
+      - name: Decode signing keystore (optional)
+        id: keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+        run: |
+          set -e
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::没有签名 Secrets（fork PR 正常现象），本次签名检查放宽"
+            echo "cert=" >> "$GITHUB_OUTPUT"
+            echo "file=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          DIGEST="$(keytool -list -v -keystore "$RUNNER_TEMP/release.jks" \
+            -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" \
+            | grep -m1 'SHA256:' | awk '{print $2}' | tr -d ':' | tr 'A-Z' 'a-z')"
+          {
+            echo "cert=$DIGEST"
+            echo "file=$RUNNER_TEMP/release.jks"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build release APK
+        env:
+          SIGNING_STORE_FILE: ${{ steps.keystore.outputs.file }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          gradle --no-daemon --stacktrace assembleRelease \
+            -PversionName="0.0.1-dev.${GITHUB_RUN_NUMBER}" \
+            -PversionCode="${GITHUB_RUN_NUMBER}"
+
+      - name: QA check APK
+        env:
+          CERT: ${{ steps.keystore.outputs.cert }}
+        run: |
+          set -e
+          ARGS="--expect-version-name 0.0.1-dev.${GITHUB_RUN_NUMBER}"
+          if [ -n "$CERT" ]; then
+            ARGS="$ARGS --expect-cert-sha256 $CERT"
+          else
+            ARGS="$ARGS --allow-debug-cert"
+          fi
+          # shellcheck disable=SC2086
+          python3 tools/qa_check.py app/build/outputs/apk/release/app-release.apk \
+            $ARGS --summary-file "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload QA artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qa-report
+          path: |
+            app/build/reports/lint-results-release.html
+            app/build/reports/lint-results-release.xml
+            app/build/reports/tests/
+            app/build/outputs/apk/release/*.apk
+          if-no-files-found: warn

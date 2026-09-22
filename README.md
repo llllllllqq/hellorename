@@ -2,7 +2,10 @@
 
 **分享 → 改名 → 再分享。** 一个极简的 Android 小工具：接收其他 App 分享过来的文件，改好名字后，再把文件分享给别的 App。
 
-[![Build APK](https://github.com/llllllllqq/hellorename/actions/workflows/build.yml/badge.svg)](https://github.com/llllllllqq/hellorename/actions/workflows/build.yml)
+> 中文系统下，应用名显示为 **改名助手**（英文/其他语系显示 `hellorename`）。
+
+[![QA](https://github.com/llllllllqq/hellorename/actions/workflows/qa.yml/badge.svg)](https://github.com/llllllllqq/hellorename/actions/workflows/qa.yml)
+[![Release APK](https://github.com/llllllllqq/hellorename/actions/workflows/build.yml/badge.svg)](https://github.com/llllllllqq/hellorename/actions/workflows/build.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![minSdk](https://img.shields.io/badge/minSdk-24-brightgreen.svg)](#)
 
@@ -43,6 +46,8 @@ hellorename 就是干这件事的：
 
 最新的 APK 在 [Releases](https://github.com/llllllllqq/hellorename/releases/latest) 页面（release 变体，已用项目自己的密钥签名，可直接安装）。
 
+版本号约定：`versionName` 来自 tag（去掉 `v`），`versionCode` 用 CI 的 run number（单调递增，可直接覆盖安装升级）。
+
 ## 使用
 
 ```
@@ -57,7 +62,31 @@ hellorename 就是干这件事的：
 
 ### 云端（推荐，本仓库就是这么发的包）
 
-推送代码 / 手动触发 `Build APK` workflow 即可；打 `v*` tag 会自动创建 Release 并附上 APK 与 `SHA256SUMS.txt`。
+- 推到 `main` / 开 PR → `QA` workflow：单元测试 → Lint 门禁 → 构建 release APK → APK 出厂体检。
+- 打 `v*` tag → `Release APK` workflow：要求签名 Secrets → 构建 → 体检 → 创建 Release（附 APK 与 `SHA256SUMS.txt`，说明自动取自 `CHANGELOG.md`）。
+
+### 出厂前自动体检（`tools/qa_check.py`）
+
+每次 CI 都会对产出的 APK 做一遍硬性检查，任何一项失败就不发版：
+
+- 包名 `moe.hellorename`、版本号与 tag 一致、`minSdk 24`、`targetSdk 34`
+- **零 `uses-permission`**（本项目不需要任何权限，多出权限即失败）
+- `application-debuggable` 不存在
+- `MainActivity` `exported=true`，注册了 `MAIN/LAUNCHER`、`SEND`、`SEND_MULTIPLE`，`launchMode=singleTop`
+- `FileProvider` `exported=false` + `grantUriPermissions=true` + authority 与 `file_paths.xml` 到位
+- APK Signature v2 校验通过，且证书 SHA-256 等于发布密钥（不是 Android Debug 证书）
+- APK 内不得残留 `*.jks / keystore.properties / local.properties`
+
+本地也能跑：
+
+```bash
+python3 tools/qa_check.py app/build/outputs/apk/release/app-release.apk \
+  --expect-cert-sha256 3682cce6d8fbf859b9b0a90ef8818acc747c82bb5f9d97418a4e6749cb6ccaca
+```
+
+（没装 build-tools 时会跳过依赖 `aapt2`/`apksigner` 的检查并给出 WARN。）
+
+### 签名
 
 签名密钥**不在仓库里**，通过 GitHub Actions Secrets 注入：
 
@@ -88,7 +117,11 @@ gradle assembleRelease                               # 或 ./gradlew assembleRel
 # 产物：app/build/outputs/apk/release/app-release.apk
 ```
 
-环境：JDK 17、Gradle 8.9、AGP 8.5.2、Kotlin 2.0.21、compileSdk 34、minSdk 24。
+环境：JDK 17、Gradle 8.9、AGP 8.5.2、Kotlin 2.0.21、compileSdk 34、minSdk 24。单元测试：
+
+```bash
+gradle test          # FileNameUtils 的纯逻辑测试
+```
 
 ## 隐私
 
@@ -99,7 +132,8 @@ gradle assembleRelease                               # 或 ./gradlew assembleRel
 
 - 改扩展名会同时改变对外声明的 MIME type，部分 App 会因此拒收（界面有提示）。
 - 多文件分享只处理第一个。
-- 文件名中的 `/ : * ? " < > |` 等非法字符会被替换成 `_`。
+- 文件名中的 `/ : * ? " < > |` 等非法字符会被替换成 `_`，结尾的点会被去掉（避免 `../` 之类的路径穿越）。
+- 文案默认英文，中文放在 `values-zh`（所有中文语系都会命中）。
 - 分享面板弹出后你没法知道对方何时读完文件，所以临时文件靠“下次启动清理 1 小时前的会话”回收。
 
 ## License

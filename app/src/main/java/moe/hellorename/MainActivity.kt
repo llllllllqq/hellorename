@@ -27,16 +27,14 @@ import java.io.FileOutputStream
 import java.util.Locale
 
 /**
- * 分享接收 → 改名 → 再分享。
+ * 分享接收 → 改名 → 再分享。全应用零权限、纯前台 Activity。
  *
- * 核心流程：
- *  1. 从别的应用分享进来时拿到一个 content:// URI（临时读授权，且授权不可转发）。
- *  2. 立刻把源文件复制到 cacheDir/shared/<session>/_incoming<ext>，之后原应用关掉也不影响。
- *  3. 用户在界面上改基础名；扩展名默认锁定（用 TextInputLayout 的 suffix 展示，不可编辑）。
- *  4. 点发送时只需把缓存里的文件 rename 成新文件名（同一目录内瞬时完成，不产生第二份数据），
- *     再通过自己的 FileProvider 把 URI 交给系统分享面板。
- *
- * 全应用不需要任何权限，也不用悬浮窗 / 前台服务。
+ * 关键约束（决定了实现方式）：
+ *  - 别的应用分享进来的 content:// URI 是“临时且不可转发”的授权，我们既不能原地改名，
+ *    也不能把授权转给下一个应用，所以必须先把数据复制成自己的。
+ *  - 复制只做一次：cacheDir/shared/<会话>/_incoming<ext>；改名时同目录 rename，零字节拷贝。
+ *  - 一旦某个路径已经交给系统分享面板，就再也不能 rename/删除它（目标应用可能正在异步读取），
+ *    因此再次改名要改成复制，见 [handedOutPaths]。
  */
 class MainActivity : AppCompatActivity() {
 
@@ -46,26 +44,32 @@ class MainActivity : AppCompatActivity() {
     private var sourceMime: String? = null
     private var originalName: String = ""
     private var originalBase: String = ""
-    private var originalExt: String = ""   // 含前导 '.'，没有扩展名时为空串
+    private var originalExt: String = ""   // 含前导 '.'，无扩展名时为空串
 
     private var sessionDir: File? = null
-    private var currentFile: File? = null  // 缓存里代表当前文件名的那个文件
+    private var currentFile: File? = null  // 缓存里代表“当前文件名”的那个文件
     private var copyJob: Job? = null
     private var copyDone = false
+
+    /** 已经交给系统分享面板的绝对路径，不允许再被 rename/删除 */
+    private val handedOutPaths = mutableSetOf<String>()
+
+    private var lastPercent = -1
+    private var lastReportedBytes = 0L
 
     /** null = 扩展名可编辑；非 null = 扩展名锁定为该值（可能是空串） */
     private var lockedExt: String? = null
 
     private val pickFile = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            // 从 SAF 拿到的授权可以持久化，顺手记下来（失败也无所谓）
+            // SAF 的授权可以持久化，顺手记下来（普通分享的 URI 会抛异常，忽略即可）
             try {
                 contentResolver.takePersistableUriPermission(
                     uri,
                     Intent.FLAG_GRANT_READ_URI_PERMISSION,
                 )
             } catch (_: Throwable) {
-                // 普通分享过来的 URI 不允许持久化，忽略
+                // ignore
             }
             loadSource(uri, extraCount = 1)
         }
@@ -126,6 +130,7 @@ class MainActivity : AppCompatActivity() {
         copyJob = null
         copyDone = false
         currentFile = null
+        handedOutPaths.clear()
 
         sourceUri = uri
         sourceMime = try {
@@ -134,20 +139,17 @@ class MainActivity : AppCompatActivity() {
             null
         }
 
-        originalName = queryDisplayName(uri)
-        val dot = originalName.lastIndexOf('.')
-        if (dot > 0) {
-            originalBase = originalName.substring(0, dot)
-            originalExt = originalName.substring(dot)
-        } else {
-            originalBase = originalName.ifBlank { getString(R.string.fallback_name) }
-            originalExt = ""
-        }
+        var display = queryDisplayName(uri)
+        if (display.isBlank()) display = getString(R.string.fallback_name)
+        originalName = display
+        val parts = FileNameUtils.split(display)
+        originalBase = parts.base
+        originalExt = parts.ext
 
-        binding.oldNameText.text = originalName.ifBlank { getString(R.string.fallback_name) }
+        binding.oldNameText.text = originalName
         binding.pickButton.visibility = View.GONE
 
-        // 默认：扩展名锁定
+        // 默认锁定扩展名
         lockedExt = originalExt
         binding.allowExtCheck.setOnCheckedChangeListener(null)
         binding.allowExtCheck.isChecked = false
@@ -177,7 +179,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
         } catch (_: Throwable) {
-            // 忽略，走下面的兜底
+            // 走下面的兜底
         }
         if (name.isBlank()) {
             name = uri.lastPathSegment?.substringAfterLast('/').orEmpty()
@@ -197,12 +199,18 @@ class MainActivity : AppCompatActivity() {
         sessionDir = dir
         currentFile = target
         copyDone = false
+        lastPercent = -1
+        lastReportedBytes = 0L
 
+        binding.progress.isIndeterminate = true
+        binding.progress.progress = 0
         binding.progress.visibility = View.VISIBLE
         binding.sendButton.isEnabled = false
 
         copyJob = lifecycleScope.launch {
-            val ok = withContext(Dispatchers.IO) { copyUriToFile(uri, target) }
+            val ok = withContext(Dispatchers.IO) {
+                copyUriToFile(uri, target) { copied, total -> onCopyProgress(copied, total) }
+            }
             if (!isActive) return@launch
             binding.progress.visibility = View.GONE
             copyDone = ok
@@ -216,31 +224,64 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** 复制进度回调，来自 IO 线程，已做节流 */
+    private fun onCopyProgress(copied: Long, total: Long) {
+        if (total <= 0L) {
+            if (copied - lastReportedBytes < PROGRESS_BYTE_STEP) return
+            lastReportedBytes = copied
+            val text = getString(R.string.status_copying_size, formatSize(copied))
+            runOnUiThread { setStatus(text, isError = false) }
+            return
+        }
+        val percent = ((copied * 100) / total).toInt().coerceIn(0, 100)
+        if (percent == lastPercent) return
+        lastPercent = percent
+        runOnUiThread {
+            binding.progress.isIndeterminate = false
+            binding.progress.progress = percent
+            setStatus(getString(R.string.status_copying_percent, percent), isError = false)
+        }
+    }
+
     /**
-     * 优先用 file descriptor + FileChannel.transferTo（零拷贝、大文件快），
-     * 失败（有些 Provider 给的是 pipe）再退回普通的流复制。
+     * 复制源 URI 到本地文件。
+     *
+     * 快路径用 file descriptor + FileChannel.transferTo；因为 transferTo 允许“少传”甚至返回 0，
+     * 所以必须用 statSize 校验字节数，对不上就整份丢弃、改走流复制，避免静默截断。
      */
-    private fun copyUriToFile(uri: Uri, target: File): Boolean {
+    private fun copyUriToFile(uri: Uri, target: File, onProgress: (Long, Long) -> Unit): Boolean {
         try {
             contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                val statSize = try {
+                    pfd.statSize
+                } catch (_: Throwable) {
+                    -1L
+                }
                 FileInputStream(pfd.fileDescriptor).use { input ->
                     FileOutputStream(target).use { output ->
                         val inChannel = input.channel
                         val outChannel = output.channel
                         var position = 0L
                         var total = 0L
+                        var stalls = 0
                         while (true) {
                             val moved = inChannel.transferTo(position, CHUNK_SIZE, outChannel)
-                            if (moved <= 0L) break
+                            if (moved <= 0L) {
+                                if (++stalls >= MAX_STALLS) break
+                                continue
+                            }
+                            stalls = 0
                             position += moved
                             total += moved
+                            onProgress(total, statSize)
                         }
-                        if (total > 0L) return true
+                        if (statSize >= 0L && total == statSize) return true
+                        if (statSize < 0L && total > 0L) return true
                     }
                 }
             }
         } catch (_: Throwable) {
-            // 走下面的兜底
+            // 落到下面的流复制
         }
         target.delete()
 
@@ -248,10 +289,13 @@ class MainActivity : AppCompatActivity() {
             contentResolver.openInputStream(uri)?.use { input ->
                 FileOutputStream(target).use { output ->
                     val buffer = ByteArray(COPY_BUFFER)
+                    var total = 0L
                     while (true) {
                         val read = input.read(buffer)
                         if (read < 0) break
                         output.write(buffer, 0, read)
+                        total += read
+                        onProgress(total, -1L)
                     }
                 }
                 true
@@ -260,6 +304,24 @@ class MainActivity : AppCompatActivity() {
             target.delete()
             false
         }
+    }
+
+    /** 同目录复制（只在“已经分享过的文件”需要改名时使用，避免打破对方正在读的 URI） */
+    private fun copyFile(source: File, target: File): Boolean = try {
+        FileInputStream(source).use { input ->
+            FileOutputStream(target).use { output ->
+                var position = 0L
+                while (true) {
+                    val moved = input.channel.transferTo(position, CHUNK_SIZE, output.channel)
+                    if (moved <= 0L) break
+                    position += moved
+                }
+            }
+        }
+        true
+    } catch (_: Throwable) {
+        target.delete()
+        false
     }
 
     // ---------------------------------------------------------------- 改名 + 分享
@@ -271,23 +333,30 @@ class MainActivity : AppCompatActivity() {
         }
         val file = currentFile
         if (!copyDone || file == null || !file.exists()) {
-            startCopy(uri)
             setStatus(getString(R.string.status_copying), isError = false)
+            startCopy(uri)
             return
         }
 
         val (rawBase, rawExt) = currentNameParts()
-        val finalName = buildFinalName(rawBase, rawExt)
+        val finalName = FileNameUtils.buildFinalName(rawBase, rawExt, originalBase)
         val target = File(sessionDir ?: file.parentFile, finalName)
 
         if (target.absolutePath != file.absolutePath) {
-            if (target.exists()) target.delete()
-            if (!file.renameTo(target)) {
+            val succeeded = if (handedOutPaths.contains(file.absolutePath)) {
+                // 旧名字已经给出去过了，不能动它，改成复制
+                copyFile(file, target)
+            } else {
+                if (target.exists()) target.delete()
+                file.renameTo(target)
+            }
+            if (!succeeded) {
                 setStatus(getString(R.string.status_rename_failed), isError = true)
                 return
             }
         }
         currentFile = target
+        handedOutPaths.add(target.absolutePath)
 
         val shareUri = try {
             FileProvider.getUriForFile(this, "$packageName.fileprovider", target)
@@ -327,36 +396,20 @@ class MainActivity : AppCompatActivity() {
         }
         val name = raw.trim()
         if (name.isEmpty()) return originalBase to originalExt
-        val dot = name.lastIndexOf('.')
-        return if (dot > 0) {
-            name.substring(0, dot) to name.substring(dot)
-        } else {
-            name to ""
-        }
-    }
-
-    private fun buildFinalName(rawBase: String, rawExt: String): String {
-        val ext = sanitizeExt(rawExt)
-        val base = sanitizeBase(rawBase).ifEmpty { sanitizeBase(originalBase) }.ifEmpty { "file" }
-        val maxBase = (MAX_NAME_LENGTH - ext.length).coerceAtLeast(MIN_BASE_LENGTH)
-        return base.take(maxBase) + ext
-    }
-
-    private fun sanitizeBase(raw: String): String =
-        raw.replace(ILLEGAL_CHARS, "_").trim().trimEnd('.', ' ').trim()
-
-    private fun sanitizeExt(raw: String): String {
-        val cleaned = raw.trim().replace(ILLEGAL_CHARS, "").removePrefix(".")
-        if (cleaned.isEmpty()) return ""
-        return "." + cleaned.take(MAX_EXT_LENGTH)
+        val parts = FileNameUtils.split(name)
+        return parts.base to parts.ext
     }
 
     private fun resolveMime(ext: String): String {
-        val clean = ext.removePrefix(".").lowercase(Locale.US)
-        val fromExt = if (clean.isEmpty()) {
+        val key = FileNameUtils.extensionKey(ext)
+        val fromExt = if (key.isEmpty()) {
             null
         } else {
-            MimeTypeMap.getSingleton().getMimeTypeFromExtension(clean)
+            try {
+                MimeTypeMap.getSingleton().getMimeTypeFromExtension(key)
+            } catch (_: Throwable) {
+                null
+            }
         }
         return if (ext.equals(originalExt, ignoreCase = true)) {
             sourceMime ?: fromExt ?: FALLBACK_MIME
@@ -370,24 +423,18 @@ class MainActivity : AppCompatActivity() {
     private fun applyExtLock(lock: Boolean) {
         val raw = binding.nameInput.text?.toString().orEmpty()
         val previous = lockedExt
+        val base = if (previous != null) raw else FileNameUtils.stripExt(raw)
         if (lock) {
-            val base = if (previous != null) raw else stripExt(raw)
             lockedExt = originalExt
             binding.nameInputLayout.suffixText = originalExt.ifEmpty { null }
             setInput(base)
         } else {
-            val base = if (previous != null) raw else stripExt(raw)
             val ext = previous ?: originalExt
             lockedExt = null
             binding.nameInputLayout.suffixText = null
             setInput(base + ext)
         }
         updateHint()
-    }
-
-    private fun stripExt(text: String): String {
-        val dot = text.lastIndexOf('.')
-        return if (dot > 0) text.substring(0, dot) else text
     }
 
     private fun updateHint() {
@@ -418,6 +465,15 @@ class MainActivity : AppCompatActivity() {
         binding.statusText.setTextColor(color)
     }
 
+    private fun formatSize(bytes: Long): String {
+        val mb = bytes / 1048576.0
+        return if (mb >= 1024.0) {
+            String.format(Locale.US, "%.2f GB", mb / 1024.0)
+        } else {
+            String.format(Locale.US, "%.1f MB", mb)
+        }
+    }
+
     private fun showEmptyState() {
         copyJob?.cancel()
         copyJob = null
@@ -429,6 +485,7 @@ class MainActivity : AppCompatActivity() {
         currentFile = null
         sessionDir = null
         copyDone = false
+        handedOutPaths.clear()
         lockedExt = ""
 
         binding.oldNameText.text = getString(R.string.old_name_none)
@@ -445,7 +502,7 @@ class MainActivity : AppCompatActivity() {
         setStatus(getString(R.string.status_no_file), isError = false)
     }
 
-    /** 清理 1 小时前的缓存会话，不会动到本次分享出来的文件 */
+    /** 清理 1 小时前的缓存会话，不动本次分享出来的文件 */
     private fun cleanupOldSessions() {
         try {
             val root = File(cacheDir, SHARED_DIR)
@@ -462,13 +519,10 @@ class MainActivity : AppCompatActivity() {
         const val SHARED_DIR = "shared"
         const val INCOMING_NAME = "_incoming"
         const val FALLBACK_MIME = "application/octet-stream"
-        const val MAX_EXT_LENGTH = 12
-        const val MAX_NAME_LENGTH = 150
-        const val MIN_BASE_LENGTH = 20
         const val CHUNK_SIZE = 1048576L          // 1 MiB
         const val COPY_BUFFER = 65536
+        const val MAX_STALLS = 3
         const val SESSION_TTL_MS = 3600000L      // 1 小时
-
-        val ILLEGAL_CHARS = Regex("[\\\\/:*?\"<>|\r\n\t]")
+        const val PROGRESS_BYTE_STEP = 4194304L  // 4 MiB
     }
 }
