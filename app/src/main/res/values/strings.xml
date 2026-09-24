@@ -11,7 +11,7 @@
     <string name="action_pick">Pick a file</string>
     <string name="allow_edit_ext">Allow editing the extension</string>
 
-    <string name="hint_ext_locked">Extension is locked. Tick the box above to change it.</string>
+    <string name="hint_ext_locked">Extension is locked to %1$s and hidden from the box. Tick the box above to change it.</string>
     <string name="hint_ext_unlocked">Extension is editable. Changing it also changes the type sent to other apps.</string>
     <string name="hint_no_ext">The original file has no extension, nothing to lock.</string>
 

@@ -11,7 +11,7 @@
     <string name="action_pick">选择一个文件</string>
     <string name="allow_edit_ext">允许修改扩展名</string>
 
-    <string name="hint_ext_locked">扩展名已锁定，勾选上面的选项即可修改。</string>
+    <string name="hint_ext_locked">扩展名锁定为 %1$s（不显示在输入框里），勾选上面的选项即可修改。</string>
     <string name="hint_ext_unlocked">扩展名可修改，改完会影响分享给对方的文件类型。</string>
     <string name="hint_no_ext">原文件没有扩展名，无法锁定。</string>
 

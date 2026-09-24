@@ -155,7 +155,6 @@ class MainActivity : AppCompatActivity() {
         binding.allowExtCheck.isChecked = false
         binding.allowExtCheck.isEnabled = originalExt.isNotEmpty()
         binding.allowExtCheck.setOnCheckedChangeListener { _, isChecked -> applyExtLock(!isChecked) }
-        binding.nameInputLayout.suffixText = originalExt.ifEmpty { null }
         setInput(originalBase)
         updateHint()
 
@@ -389,7 +388,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 当前输入对应的 (基础名, 扩展名)；扩展名锁定时不信任输入框里的后缀 */
+    /** 当前输入对应的 (基础名, 扩展名)；扩展名锁定时输入框里只有基础名，多余的后缀一律不采信 */
     private fun currentNameParts(): Pair<String, String> {
         val raw = binding.nameInput.text?.toString().orEmpty()
         val locked = lockedExt
@@ -428,22 +427,23 @@ class MainActivity : AppCompatActivity() {
         val previous = lockedExt
         val base = if (previous != null) raw else FileNameUtils.stripExt(raw)
         if (lock) {
+            // 锁定态：输入框里只留基础名，扩展名既不进文本、也不再用 suffix 展示
             lockedExt = originalExt
-            binding.nameInputLayout.suffixText = originalExt.ifEmpty { null }
             setInput(base)
         } else {
             val ext = previous ?: originalExt
             lockedExt = null
-            binding.nameInputLayout.suffixText = null
             setInput(base + ext)
         }
         updateHint()
     }
 
     private fun updateHint() {
+        // 锁定时扩展名不显示在输入框里，改由提示行说明保留的是哪个扩展名
+        val locked = lockedExt
         binding.hintText.text = when {
             originalExt.isEmpty() -> getString(R.string.hint_no_ext)
-            lockedExt != null -> getString(R.string.hint_ext_locked)
+            locked != null -> getString(R.string.hint_ext_locked, locked)
             else -> getString(R.string.hint_ext_unlocked)
         }
     }
@@ -492,7 +492,6 @@ class MainActivity : AppCompatActivity() {
         lockedExt = ""
 
         binding.oldNameText.text = getString(R.string.old_name_none)
-        binding.nameInputLayout.suffixText = null
         setInput("")
         binding.allowExtCheck.setOnCheckedChangeListener(null)
         binding.allowExtCheck.isChecked = false
