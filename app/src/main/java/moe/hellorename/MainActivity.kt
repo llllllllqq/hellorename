@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.view.View
@@ -602,7 +603,7 @@ class MainActivity : AppCompatActivity() {
             putExtra(Intent.EXTRA_TITLE, displayName)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 // 尽力把选择器定位到下载目录；定位失败系统自行回退，无副作用
-                putExtra(MediaStore.EXTRA_INITIAL_URI, downloadsDocumentUri())
+                putExtra(DocumentsContract.EXTRA_INITIAL_URI, downloadsDocumentUri())
             }
         }
         try {
