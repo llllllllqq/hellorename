@@ -23,14 +23,15 @@
     <string name="status_copying_size">正在复制文件… %1$s</string>
     <string name="status_ready">复制完成，可以改名后发送了。</string>
     <string name="status_copy_failed">复制失败，点“发送”可重试。</string>
-    <string name="status_rename_failed">重命名失败，请检查文件名是否含有非法字符。</string>
+    <string name="status_rename_failed">重命名失败，文件名可能太长，请改短一些。</string>
     <string name="status_saving">正在保存到下载…</string>
     <string name="status_save_failed">保存失败。</string>
+    <string name="status_save_canceled">已取消保存。</string>
     <plurals name="status_multi">
         <item quantity="other">收到 %1$d 个文件，本版本只处理第 1 个。</item>
     </plurals>
     <string name="toast_no_share_app">没有找到能接收该类型文件的应用。</string>
-    <string name="toast_sent">已发起分享：请选择其它应用接收文件，勿再选本应用，否则会无限循环。</string>
+    <string name="toast_sent">请选择其它应用接收文件，勿再选「%1$s」。</string>
     <string name="toast_saved">已保存到下载：%1$s</string>
     <string name="toast_save_failed">保存文件失败。</string>
     <string name="warn_no_loop">点“发送”后，请在系统分享面板里选择其它应用接收文件；请勿再次选择本应用，否则文件会被反复转手、无限循环。</string>

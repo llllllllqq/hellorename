@@ -8,8 +8,19 @@ import java.util.Locale
 object FileNameUtils {
 
     const val MAX_EXT_LENGTH = 12
+    /** 名字的字符数上限（可读性考虑；真正的硬限制见 [MAX_NAME_BYTES]） */
     const val MAX_NAME_LENGTH = 150
+
+    /**
+     * 单个文件名的**字节**上限。ext4/f2fs 只允许 255 字节，而一个汉字在 UTF-8 里占 3 字节，
+     * 只按字符数截断（150 个汉字 = 450 字节）会让 rename/MediaStore 直接 ENAMETOOLONG 失败。
+     * 这里留一段余量，给 FUSE/MediaStore 可能追加的后缀（如 ` (1)`）。
+     */
+    const val MAX_NAME_BYTES = 240
     const val MIN_BASE_LENGTH = 20
+
+    /** 基础名至少保留这么多字节，避免扩展名异常时把名字截成空 */
+    const val MIN_BASE_BYTES = 24
     const val DEFAULT_BASE = "file"
 
     /** FAT/exFAT 不允许的字符 + 控制字符 */
@@ -57,15 +68,33 @@ object FileNameUtils {
 
     /**
      * 拼出最终文件名。基础名为空时回退到 fallbackBase（原文件名），再不行用 "file"。
-     * 总长度受 [MAX_NAME_LENGTH] 限制，但扩展名永远优先保留。
+     * 基础名同时受 [MAX_NAME_LENGTH]（字符）与 [MAX_NAME_BYTES]（UTF-8 字节）限制，
+     * 扩展名永远优先保留（它决定对外声明的类型，不能丢也不能被截断）。
      */
     fun buildFinalName(rawBase: String, rawExt: String, fallbackBase: String): String {
         val ext = sanitizeExt(rawExt)
         val base = sanitizeBase(rawBase)
             .ifEmpty { sanitizeBase(fallbackBase) }
             .ifEmpty { DEFAULT_BASE }
-        val maxBase = (MAX_NAME_LENGTH - ext.length).coerceAtLeast(MIN_BASE_LENGTH)
-        return base.take(maxBase) + ext
+        val maxBaseChars = (MAX_NAME_LENGTH - ext.length).coerceAtLeast(MIN_BASE_LENGTH)
+        val maxBaseBytes = (MAX_NAME_BYTES - ext.toByteArray(Charsets.UTF_8).size)
+            .coerceAtLeast(MIN_BASE_BYTES)
+        val limited = truncateUtf8(base.take(maxBaseChars), maxBaseBytes)
+        return limited + ext
+    }
+
+    /**
+     * 按 UTF-8 字节数截断，并且**绝不劈开一个多字节字符**。
+     * 直接 `toByteArray().copyOf(n)` 会把汉字/emoji 截成半个字符（变成 U+FFFD）。
+     */
+    fun truncateUtf8(text: String, maxBytes: Int): String {
+        if (maxBytes <= 0) return ""
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        if (bytes.size <= maxBytes) return text
+        var end = maxBytes
+        // 0b10xxxxxx 是 UTF-8 的续字节：一直回退到字符边界为止
+        while (end > 0 && (bytes[end].toInt() and 0xC0) == 0x80) end--
+        return String(bytes, 0, end, Charsets.UTF_8)
     }
 
     /** 给 MimeTypeMap 用的 key（小写、无点） */

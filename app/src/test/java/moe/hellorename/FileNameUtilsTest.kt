@@ -146,6 +146,54 @@ class FileNameUtilsTest {
     }
 
     @Test
+    fun `buildFinalName keeps a long CJK name within the byte limit`() {
+        // 150 个汉字 = 450 字节，只按字符截断会让 rename 直接失败（ext4/f2fs 上限 255 字节）
+        val name = FileNameUtils.buildFinalName("很".repeat(150), ".txt", "old")
+        assertTrue(name.endsWith(".txt"))
+        assertTrue(
+            name.toByteArray(Charsets.UTF_8).size <= FileNameUtils.MAX_NAME_BYTES,
+        )
+        // 不能劈开一个汉字（劈开会产生 U+FFFD 替换字符）
+        assertFalse(name.contains('\uFFFD'))
+    }
+
+    @Test
+    fun `buildFinalName keeps emoji intact within the byte limit`() {
+        // 一个 emoji 占 4 字节，按字节截断很容易劈成半个
+        val name = FileNameUtils.buildFinalName("🎉".repeat(100), ".png", "old")
+        assertTrue(name.endsWith(".png"))
+        assertTrue(
+            name.toByteArray(Charsets.UTF_8).size <= FileNameUtils.MAX_NAME_BYTES,
+        )
+        assertFalse(name.contains('\uFFFD'))
+    }
+
+    @Test
+    fun `buildFinalName leaves a short CJK name alone`() {
+        assertEquals("我的照片.png", FileNameUtils.buildFinalName("我的照片", ".png", "old"))
+    }
+
+    // ---------- truncateUtf8 ----------
+
+    @Test
+    fun `truncateUtf8 cuts on ascii`() {
+        assertEquals("abc", FileNameUtils.truncateUtf8("abcdef", 3))
+        assertEquals("abcdef", FileNameUtils.truncateUtf8("abcdef", 6))
+        assertEquals("abcdef", FileNameUtils.truncateUtf8("abcdef", 99))
+        assertEquals("", FileNameUtils.truncateUtf8("abcdef", 0))
+    }
+
+    @Test
+    fun `truncateUtf8 never splits a multi byte character`() {
+        val cjk = "汉字"
+        assertEquals("汉", FileNameUtils.truncateUtf8(cjk, 3))
+        assertEquals("汉", FileNameUtils.truncateUtf8(cjk, 4))
+        assertEquals("汉", FileNameUtils.truncateUtf8(cjk, 5))
+        assertEquals("汉字", FileNameUtils.truncateUtf8(cjk, 6))
+        assertFalse(FileNameUtils.truncateUtf8(cjk, 4).contains('\uFFFD'))
+    }
+
+    @Test
     fun `buildFinalName never produces a slash`() {
         val name = FileNameUtils.buildFinalName("../../evil", ".sh", "old")
         assertFalse(name.contains('/'))

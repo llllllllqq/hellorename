@@ -23,15 +23,16 @@
     <string name="status_copying_size">Copying file… %1$s</string>
     <string name="status_ready">Copy finished. Rename it and hit Send.</string>
     <string name="status_copy_failed">Copy failed. Tap Send to retry.</string>
-    <string name="status_rename_failed">Rename failed. Please check for illegal characters.</string>
+    <string name="status_rename_failed">Rename failed. The file name may be too long — try a shorter one.</string>
     <string name="status_saving">Saving to Downloads…</string>
     <string name="status_save_failed">Save failed.</string>
+    <string name="status_save_canceled">Save canceled.</string>
     <plurals name="status_multi">
         <item quantity="one">%1$d file received. This version only handles the first one.</item>
         <item quantity="other">%1$d files received. This version only handles the first one.</item>
     </plurals>
     <string name="toast_no_share_app">No app can receive this file type.</string>
-    <string name="toast_sent">Share started. Choose a DIFFERENT app to receive the file — picking this app again loops it straight back here.</string>
+    <string name="toast_sent">Pick a different app to receive the file; don\'t pick %1$s again.</string>
     <string name="toast_saved">Saved to Downloads: %1$s</string>
     <string name="toast_save_failed">Could not save the file.</string>
     <string name="warn_no_loop">After sending, choose a DIFFERENT app in the share sheet to receive the file. Selecting this app again creates an endless loop.</string>
