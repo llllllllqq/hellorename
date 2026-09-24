@@ -9,6 +9,7 @@
     <string name="hint_new_name">新文件名</string>
     <string name="action_send">发送</string>
     <string name="action_pick">选择一个文件</string>
+    <string name="action_save">保存到下载</string>
     <string name="allow_edit_ext">允许修改扩展名</string>
 
     <string name="hint_ext_locked">扩展名锁定为 %1$s（不显示在输入框里），勾选上面的选项即可修改。</string>
@@ -23,10 +24,14 @@
     <string name="status_ready">复制完成，可以改名后发送了。</string>
     <string name="status_copy_failed">复制失败，点“发送”可重试。</string>
     <string name="status_rename_failed">重命名失败，请检查文件名是否含有非法字符。</string>
-    <string name="status_sent">已交给系统分享面板。</string>
-    <string name="status_ext_changed">已改扩展名，部分应用可能因类型不符而拒收。</string>
+    <string name="status_saving">正在保存到下载…</string>
+    <string name="status_save_failed">保存失败。</string>
     <plurals name="status_multi">
         <item quantity="other">收到 %1$d 个文件，本版本只处理第 1 个。</item>
     </plurals>
     <string name="toast_no_share_app">没有找到能接收该类型文件的应用。</string>
+    <string name="toast_sent">已发起分享：请选择其它应用接收文件，勿再选本应用，否则会无限循环。</string>
+    <string name="toast_saved">已保存到下载：%1$s</string>
+    <string name="toast_save_failed">保存文件失败。</string>
+    <string name="warn_no_loop">点“发送”后，请在系统分享面板里选择其它应用接收文件；请勿再次选择本应用，否则文件会被反复转手、无限循环。</string>
 </resources>

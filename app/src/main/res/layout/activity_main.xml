@@ -48,41 +48,51 @@
             android:textColor="?attr/colorOnSurfaceVariant"
             android:textSize="13sp" />
 
-        <!-- ===== 下半部分：大输入框（自动换行） + 发送按钮 ===== -->
-        <LinearLayout
+        <!-- ===== 大输入框（自动换行，整行） ===== -->
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/nameInputLayout"
+            style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
+            android:hint="@string/hint_new_name"
+            app:endIconMode="none">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/nameInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="top|start"
+                android:inputType="textMultiLine|textNoSuggestions"
+                android:maxLines="10"
+                android:minLines="4"
+                android:textSize="18sp" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <!-- ===== 按钮行：保存到下载（次要）+ 发送（主要），并列在输入框下方 ===== -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
             android:baselineAligned="false"
             android:orientation="horizontal">
 
-            <com.google.android.material.textfield.TextInputLayout
-                android:id="@+id/nameInputLayout"
-                style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/saveButton"
+                style="@style/Widget.Material3.Button.TonalButton"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
                 android:layout_weight="1"
-                android:hint="@string/hint_new_name"
-                app:endIconMode="none">
-
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/nameInput"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:gravity="top|start"
-                    android:inputType="textMultiLine|textNoSuggestions"
-                    android:maxLines="10"
-                    android:minLines="4"
-                    android:textSize="18sp" />
-            </com.google.android.material.textfield.TextInputLayout>
+                android:enabled="false"
+                android:text="@string/action_save" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/sendButton"
-                android:layout_width="wrap_content"
-                android:layout_height="match_parent"
-                android:layout_marginStart="8dp"
-                android:minWidth="88dp"
-                android:minHeight="120dp"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:enabled="false"
                 android:text="@string/action_send" />
         </LinearLayout>
 
@@ -110,6 +120,17 @@
             android:layout_marginStart="4dp"
             android:text="@string/hint_no_ext"
             android:textColor="?attr/colorOnSurfaceVariant"
+            android:textSize="12sp" />
+
+        <!-- ===== 底部警示语：防止在分享面板里又选回本应用造成无限循环 ===== -->
+        <TextView
+            android:id="@+id/warningText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_marginTop="12dp"
+            android:text="@string/warn_no_loop"
+            android:textColor="@color/status_error"
             android:textSize="12sp" />
     </LinearLayout>
 </ScrollView>
