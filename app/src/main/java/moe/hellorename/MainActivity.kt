@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.storage.StorageManager
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.OpenableColumns
@@ -412,11 +413,30 @@ class MainActivity : AppCompatActivity() {
         onProgress: (Long, Long) -> Unit,
     ): CopyOutcome {
         val need = sourceSize
-        if (need > 0L && !CacheCleaner.hasRoomFor(dir.usableSpace, need)) {
+        if (need > 0L && !CacheCleaner.hasRoomFor(writableSpace(dir), need)) {
             cleanupCache(force = true)
-            if (!CacheCleaner.hasRoomFor(dir.usableSpace, need)) return CopyOutcome.NO_SPACE
+            if (!CacheCleaner.hasRoomFor(writableSpace(dir), need)) return CopyOutcome.NO_SPACE
         }
         return copyUriToFile(uri, target, cancelled, onProgress)
+    }
+
+    /**
+     * 判断「放不放得下」用的可写空间。
+     *
+     * 只看 `usableSpace` 会在“缓存很多、剩余空间紧张”时误报空间不足——而本应用自己的缓存
+     * 正是系统可以随手清掉的那部分。API 26+ 问一次系统「算上可清理的缓存实际能腾出多少」，
+     * 只查询、不真的 allocateBytes：真腾空间让系统按需做，我们不替它决定清谁。
+     */
+    private fun writableSpace(dir: File): Long {
+        val raw = dir.usableSpace
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return raw
+        return try {
+            val manager = getSystemService(StorageManager::class.java) ?: return raw
+            maxOf(raw, manager.getAllocatableBytes(manager.getUuidForPath(dir)))
+        } catch (_: Throwable) {
+            // 个别 ROM 上拿不到 UUID / 查询失败：退回裸 usableSpace，绝不因此拦住复制
+            raw
+        }
     }
 
     /**
