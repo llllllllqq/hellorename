@@ -23,6 +23,7 @@
     <string name="status_copying_size">Copying file… %1$s</string>
     <string name="status_ready">Copy finished. Rename it and hit Send.</string>
     <string name="status_copy_failed">Copy failed. Tap Send to retry.</string>
+    <string name="status_storage_low">Not enough free space to copy the file. Free up space, then tap Send to retry.</string>
     <string name="status_rename_failed">Rename failed. The file name may be too long — try a shorter one.</string>
     <string name="status_saving">Saving to Downloads…</string>
     <string name="status_save_failed">Save failed.</string>

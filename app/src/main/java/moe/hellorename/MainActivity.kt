@@ -12,6 +12,7 @@ import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.OpenableColumns
+import android.util.Log
 import android.view.View
 import android.webkit.MimeTypeMap
 import android.widget.Toast
@@ -24,6 +25,7 @@ import androidx.lifecycle.lifecycleScope
 import com.google.android.material.color.MaterialColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -41,17 +43,29 @@ import java.util.Locale
  *    也不能把授权转给下一个应用，所以必须先把数据复制成自己的。
  *  - 复制只做一次：cacheDir/shared/<会话>/_incoming<ext>；改名时同目录 rename，零字节拷贝。
  *  - 一旦某个路径已经交给系统分享面板，就再也不能 rename/删除它（目标应用可能正在异步读取），
- *    因此再次改名要改成复制，见 [handedOutPaths]。
+ *    因此再次改名要改成复制，见 [handedOutPaths]；跨进程的那一半保护由 [CacheStore.markDelivered]
+ *    落在磁盘上，否则一重启就失效。
+ *  - 缓存清理的规则与磁盘操作都在 [CacheCleaner] / [CacheStore]（纯 java.io，可单测），
+ *    本类只负责“在正确的线程、正确的时机调用它，并把还活着的会话登记进 [CacheState]”。
  */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
+
+    /** 会话副本目录：cacheDir/shared（FileProvider 暴露的就是它） */
+    private val sharedRoot: File get() = File(cacheDir, CacheStore.SHARED_DIR)
+
+    /** 已交付标记目录：cacheDir/shared-state，刻意不放在 shared/ 里面，避免被 FileProvider 暴露 */
+    private val stateRoot: File get() = File(cacheDir, CacheStore.STATE_DIR)
 
     private var sourceUri: Uri? = null
     private var sourceMime: String? = null
     private var originalName: String = ""
     private var originalBase: String = ""
     private var originalExt: String = ""   // 含前导 '.'，无扩展名时为空串
+
+    /** 源文件字节数（-1 = 对方报不出来），仅用于复制前的空间预检 */
+    private var sourceSize: Long = -1L
 
     private var sessionDir: File? = null
     private var currentFile: File? = null  // 缓存里代表“当前文件名”的那个文件
@@ -109,7 +123,11 @@ class MainActivity : AppCompatActivity() {
             binding.saveButton.isEnabled = false
             setStatus(getString(R.string.status_saving), isError = false)
             lifecycleScope.launch {
-                val ok = withContext(Dispatchers.IO) { writeToUri(source, dest) }
+                val ok = withContext(Dispatchers.IO) {
+                    val written = writeToUri(source, dest)
+                    if (written) markDelivered(source)
+                    written
+                }
                 if (ok) {
                     // 真的写进去了才算交付过，之后这条路径不许再被 rename/删除
                     handedOutPaths.add(source.absolutePath)
@@ -138,14 +156,24 @@ class MainActivity : AppCompatActivity() {
         binding.pickButton.setOnClickListener { pickFile.launch(arrayOf("*/*")) }
         binding.allowExtCheck.setOnCheckedChangeListener { _, isChecked -> applyExtLock(!isChecked) }
 
-        cleanupOldSessions()
+        // 冷启动强制清一次：删除是真实磁盘操作，必须离开主线程（旧实现在这里同步删，攒几个大文件就卡启动）
+        // 顺序上不再需要“先清理再建目录”来保命：当前会话会被 CacheState 登记为活会话
+        startCleanup(force = true)
         handleShareIntent(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        // singleTop 复用同一个界面实例时不会再走 onCreate，这里补一次触发（按 10 分钟节流）
+        startCleanup(force = false)
         handleShareIntent(intent)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // 界面没了就不再是“活会话”：交过货的由交付标记保温，没交过货的留给下一次清理收走
+        CacheState.unregister(sessionDir)
     }
 
     // ---------------------------------------------------------------- 入口解析
@@ -193,7 +221,9 @@ class MainActivity : AppCompatActivity() {
             null
         }
 
-        var display = queryDisplayName(uri)
+        val meta = querySourceMeta(uri)
+        sourceSize = meta.size
+        var display = meta.name
         if (display.isBlank()) display = getString(R.string.fallback_name)
         originalName = display
         val parts = FileNameUtils.split(display)
@@ -224,23 +254,39 @@ class MainActivity : AppCompatActivity() {
         startCopy(uri)
     }
 
-    private fun queryDisplayName(uri: Uri): String {
+    /** 源文件的名字与大小（SIZE 拿不到时返回 -1：pipe 型 Provider 报不出来） */
+    private class SourceMeta(val name: String, val size: Long)
+
+    private fun querySourceMeta(uri: Uri): SourceMeta {
         var name = ""
+        var size = -1L
         try {
-            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
-                ?.use { cursor ->
-                    if (cursor.moveToFirst()) {
-                        val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                        if (index >= 0) name = cursor.getString(index).orEmpty()
+            // 名字和大小一次查完：多开一次 cursor 只是白花钱
+            contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (nameIndex >= 0 && !cursor.isNull(nameIndex)) {
+                        name = cursor.getString(nameIndex).orEmpty()
+                    }
+                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) {
+                        size = cursor.getLong(sizeIndex)
                     }
                 }
+            }
         } catch (_: Throwable) {
             // 走下面的兜底
         }
         if (name.isBlank()) {
             name = uri.lastPathSegment?.substringAfterLast('/').orEmpty()
         }
-        return name.trim()
+        return SourceMeta(name.trim(), size)
     }
 
     // ---------------------------------------------------------------- 复制到缓存
@@ -250,8 +296,17 @@ class MainActivity : AppCompatActivity() {
         // 它们只认旧会话号，永远覆盖不掉新会话的最终状态（“卡在 100%”的根源）
         copyJob?.cancel()
         val session = ++copySession
+        // 上一个会话目录（重试/被系统回收后重新复制）就此放弃：不撤登记的话，
+        // 它会一直被当成“活会话”，在本进程生命周期内再也不会被清理
+        releaseSessionDir()
 
-        val dir = File(File(cacheDir, SHARED_DIR), System.currentTimeMillis().toString())
+        // 新建会话时顺手清理一次（节流）：清理不再只发生在冷启动，
+        // 长期存活的进程也不会让缓存无限涨
+        startCleanup(force = false)
+
+        // 目录名带上会话号：只用毫秒时间戳时，同一毫秒内的两次复制会命中同一个已存在的目录
+        // （mkdirs 因目录存在而“成功”），两次会话共用 _incoming<ext>，后一次覆盖前一次
+        val dir = File(sharedRoot, CacheStore.newSessionName(System.currentTimeMillis(), session))
         if (!dir.exists() && !dir.mkdirs()) {
             copyJob = null
             copyDone = false
@@ -260,6 +315,8 @@ class MainActivity : AppCompatActivity() {
             setStatus(getString(R.string.status_copy_failed), isError = true)
             return
         }
+        // 登记为“本进程正在用”：清理逻辑绝不允许碰它
+        CacheState.register(dir)
         // 临时文件名只借用规范化后的扩展名：originalExt 直接来自对方应用的 DISPLAY_NAME，
         // 可能超长或含 `/ \ :` 等字符，不能原样拼进路径
         val incomingExt = FileNameUtils.sanitizeExt(originalExt)
@@ -276,8 +333,9 @@ class MainActivity : AppCompatActivity() {
         setButtonsEnabled(false)
 
         copyJob = lifecycleScope.launch {
-            val ok = withContext(Dispatchers.IO) {
-                copyUriToFile(uri, target, { !isActive }) { copied, total ->
+            val outcome = withContext(Dispatchers.IO) {
+                // 空间预检也在 IO 线程：它需要 statfs，而且空间不够时还要先真删一次旧会话
+                ensureRoomThenCopy(dir, uri, target, { !isActive }) { copied, total ->
                     onCopyProgress(session, copied, total)
                 }
             }
@@ -285,14 +343,20 @@ class MainActivity : AppCompatActivity() {
             if (!isActive || session != copySession) return@launch
             finishedSession = session
             binding.progress.visibility = View.GONE
-            copyDone = ok
+            copyDone = outcome == CopyOutcome.OK
             // 成功可以交付；失败也保持可点（再点“发送/保存”会重新复制），两种情况都不留死路
             setButtonsEnabled(true)
-            if (ok) {
-                setStatus(getString(R.string.status_ready), isError = false)
-            } else {
-                currentFile = null
-                setStatus(getString(R.string.status_copy_failed), isError = true)
+            when (outcome) {
+                CopyOutcome.OK -> setStatus(getString(R.string.status_ready), isError = false)
+                CopyOutcome.NO_SPACE -> {
+                    currentFile = null
+                    // 空间不足要说清楚：旧实现只说“复制失败”，用户根本不知道去清空间
+                    setStatus(getString(R.string.status_storage_low), isError = true)
+                }
+                CopyOutcome.FAILED -> {
+                    currentFile = null
+                    setStatus(getString(R.string.status_copy_failed), isError = true)
+                }
             }
         }
     }
@@ -328,6 +392,33 @@ class MainActivity : AppCompatActivity() {
     private fun isStale(session: Int): Boolean =
         session != copySession || session == finishedSession
 
+    /** 复制结果：只有 [OK] 才允许继续交付 */
+    private enum class CopyOutcome { OK, NO_SPACE, FAILED }
+
+    /**
+     * 复制前的空间预检 + 复制。
+     *
+     * cacheDir 在 /data 里，把一份比剩余空间还大的文件（4K 视频很常见）复制进来会把内部存储写满：
+     * 轻则复制失败，重则拖累整个系统。而“空间不足”里有相当一部分其实是被旧会话占着，
+     * 所以先强行清一次再复核，还是不够才明确告诉用户是空间不足。
+     *
+     * 只在 IO 线程调用。
+     */
+    private fun ensureRoomThenCopy(
+        dir: File,
+        uri: Uri,
+        target: File,
+        cancelled: () -> Boolean,
+        onProgress: (Long, Long) -> Unit,
+    ): CopyOutcome {
+        val need = sourceSize
+        if (need > 0L && !CacheCleaner.hasRoomFor(dir.usableSpace, need)) {
+            cleanupCache(force = true)
+            if (!CacheCleaner.hasRoomFor(dir.usableSpace, need)) return CopyOutcome.NO_SPACE
+        }
+        return copyUriToFile(uri, target, cancelled, onProgress)
+    }
+
     /**
      * 复制源 URI 到本地文件。
      *
@@ -344,8 +435,8 @@ class MainActivity : AppCompatActivity() {
         target: File,
         cancelled: () -> Boolean,
         onProgress: (Long, Long) -> Unit,
-    ): Boolean {
-        var verified = false
+    ): CopyOutcome {
+        var outcome = CopyOutcome.FAILED
         try {
             contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
                 val statSize = try {
@@ -373,19 +464,21 @@ class MainActivity : AppCompatActivity() {
                                 onProgress(total, statSize)
                             }
                             // 字节数对不上就不算成功（含被取消的情况）
-                            verified = !cancelled() && total == statSize
+                            if (!cancelled() && total == statSize) outcome = CopyOutcome.OK
                         }
                     }
                 }
             }
-        } catch (_: Throwable) {
-            verified = false
+        } catch (error: Throwable) {
+            outcome = if (CacheCleaner.isNoSpace(error)) CopyOutcome.NO_SPACE else CopyOutcome.FAILED
         }
-        if (verified) return true
+        if (outcome == CopyOutcome.OK) return CopyOutcome.OK
 
         // 半成品一律丢掉，改用下面的流复制重来一遍
         target.delete()
-        if (cancelled()) return false
+        if (cancelled()) return CopyOutcome.FAILED
+        // 这里不因为快路径判了 NO_SPACE 就提前返回：isNoSpace 是按异常文案认的，可能误判，
+        // 而真没空间时流复制自己也会认出同一个判定——多试一次的代价远小于误报"空间不足"
         return streamCopyToFile(uri, target, cancelled, onProgress)
     }
 
@@ -395,26 +488,32 @@ class MainActivity : AppCompatActivity() {
         target: File,
         cancelled: () -> Boolean,
         onProgress: (Long, Long) -> Unit,
-    ): Boolean = try {
-        val complete = contentResolver.openInputStream(uri)?.use { input ->
+    ): CopyOutcome = try {
+        var reachedEof = false
+        val opened = contentResolver.openInputStream(uri)?.use { input ->
             FileOutputStream(target).use { output ->
                 val buffer = ByteArray(COPY_BUFFER)
                 var total = 0L
                 while (!cancelled()) {
                     val read = input.read(buffer)
-                    if (read < 0) break
+                    if (read < 0) {
+                        reachedEof = true
+                        break
+                    }
                     output.write(buffer, 0, read)
                     total += read
                     onProgress(total, -1L)
                 }
             }
-            !cancelled()
+            true
         } ?: false
+        val complete = opened && reachedEof && !cancelled()
         if (!complete) target.delete()
-        complete
-    } catch (_: Throwable) {
+        if (complete) CopyOutcome.OK else CopyOutcome.FAILED
+    } catch (error: Throwable) {
         target.delete()
-        false
+        // 写满磁盘时这里才第一次知道：明确报“空间不足”，而不是笼统的“复制失败”
+        if (CacheCleaner.isNoSpace(error)) CopyOutcome.NO_SPACE else CopyOutcome.FAILED
     }
 
     /**
@@ -480,7 +579,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** 把改名后的文件交给系统分享面板；只有 startActivity 成功才算真正交付 */
-    private fun startShare(file: File) {
+    private suspend fun startShare(file: File) {
         val finalName = file.name
         val shareUri = try {
             FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
@@ -508,6 +607,10 @@ class MainActivity : AppCompatActivity() {
         }
         // 真的交出去了：登记这条路径“别人可能在读”，之后不许再 rename/删除它
         handedOutPaths.add(file.absolutePath)
+        // 同一件事还要落一份到磁盘：内存里的登记一重启就没了，而清理恰恰发生在那之后。
+        // 用 NonCancellable：万一界面正好在这时被系统销毁，标记也必须写完，
+        // 否则已交付的文件会在下次冷启动被当成“未交付”删掉，把对方的 URI 变成死链。
+        withContext(NonCancellable + Dispatchers.IO) { markDelivered(file) }
         // Toast 提醒“选别的应用”，然后关掉主界面，防止用户回头又选本应用
         finishWithToast(getString(R.string.toast_sent, getString(R.string.app_name)))
     }
@@ -518,8 +621,11 @@ class MainActivity : AppCompatActivity() {
      * 改名里的重复复制（大文件）和 rename 全部丢到 IO 线程，不再卡主线程；
      * 期间禁用两个按钮防连点。是否算“交付过”由 [onReady] 决定：只有真正交付成功
      * 才会把路径登记进 [handedOutPaths]，取消/失败不会。
+     *
+     * [onReady] 是挂起函数：交付成功后要顺手把“已交付”标记写到磁盘上（IO 线程），
+     * 而这一步必须赶在界面被 finish 掉之前完成，所以不能另起一个 lifecycleScope 协程。
      */
-    private fun prepareThenAct(onReady: (File) -> Unit) {
+    private fun prepareThenAct(onReady: suspend (File) -> Unit) {
         val uri = sourceUri
         if (uri == null) {
             setStatus(getString(R.string.status_no_file), isError = true)
@@ -652,7 +758,10 @@ class MainActivity : AppCompatActivity() {
         binding.progress.visibility = View.VISIBLE
         lifecycleScope.launch {
             val saved = withContext(Dispatchers.IO) {
-                insertIntoDownloads(source, displayName, mime)
+                insertIntoDownloads(source, displayName, mime)?.also {
+                    // 真的写成功才算交付过；标记落盘要在同一个 IO 块里做，别再多切一次线程
+                    markDelivered(source)
+                }
             }
             binding.progress.visibility = View.GONE
             if (saved != null) {
@@ -843,8 +952,9 @@ class MainActivity : AppCompatActivity() {
         originalName = ""
         originalBase = ""
         originalExt = ""
+        sourceSize = -1L
         currentFile = null
-        sessionDir = null
+        releaseSessionDir()
         copyDone = false
         handedOutPaths.clear()
         lockedExt = ""
@@ -863,27 +973,73 @@ class MainActivity : AppCompatActivity() {
         setStatus(getString(R.string.status_no_file), isError = false)
     }
 
-    /** 清理 1 小时前的缓存会话，不动本次分享出来的文件 */
-    private fun cleanupOldSessions() {
-        try {
-            val root = File(cacheDir, SHARED_DIR)
-            val cutoff = System.currentTimeMillis() - SESSION_TTL_MS
-            root.listFiles()?.forEach { child ->
-                if (child.lastModified() < cutoff) child.deleteRecursively()
-            }
-        } catch (_: Throwable) {
-            // 清理失败无关紧要
+    // ---------------------------------------------------------------- 缓存清理
+
+    /**
+     * 触发一次缓存清理。**清理永远在 IO 线程跑**：删除是真实磁盘操作，旧实现放在 onCreate 里
+     * 同步做，攒了几个 >1 小时的大文件就会卡住冷启动（甚至 ANR）。
+     *
+     * 顺序上也不再需要“先清理、再建当前会话目录”来保命：当前会话在 [startCopy] 里就登记进
+     * [CacheState] 了，清理带排除集，删不到它。
+     */
+    private fun startCleanup(force: Boolean) {
+        lifecycleScope.launch {
+            withContext(Dispatchers.IO) { cleanupCache(force) }
         }
     }
 
+    /** 只在 IO 线程调用；[force] 见 [CacheState.shouldCleanup] */
+    private fun cleanupCache(force: Boolean) {
+        val shared = sharedRoot
+        // 先看目录在不在：目录都没有就别白吃掉一次节流窗口
+        if (!shared.isDirectory) return
+        val now = System.currentTimeMillis()
+        if (!CacheState.shouldCleanup(now, force)) return
+        try {
+            val report = CacheStore.cleanup(shared, stateRoot, CacheState.livePaths(), now)
+            if (report.deleted > 0 || report.failed > 0) {
+                // 旧实现把一切都吞掉，线上出问题无从下手，这里至少留一行可查
+                Log.i(
+                    TAG,
+                    "cache cleanup: deleted=${report.deleted} freed=${report.freedBytes}B" +
+                        " keptLive=${report.keptLive} keptFresh=${report.keptFresh}" +
+                        " failed=${report.failed}",
+                )
+            }
+        } catch (error: Throwable) {
+            // 清理失败无关紧要，但不能把异常带进分享流程
+            Log.w(TAG, "cache cleanup failed", error)
+        }
+    }
+
+    /**
+     * 把这个会话标成“已交付”：清理时按 [CacheCleaner.DELIVERED_TTL_MS] 保温，
+     * 而不是按“没交出去”的短 TTL 清掉——对方 App 可能还在异步读这个文件。
+     * 只在 IO 线程调用。
+     */
+    private fun markDelivered(file: File) {
+        val dir = file.parentFile ?: return
+        // 只认 shared/<会话>/<文件> 这一层，避免给奇怪路径写状态
+        if (dir.parentFile?.absolutePath != sharedRoot.absolutePath) return
+        if (!CacheStore.markDelivered(stateRoot, dir.name, System.currentTimeMillis())) {
+            // 写不进去就只剩内存里的 handedOutPaths 保护，进程一结束就失效：记一笔，别让它无声无息
+            Log.w(TAG, "mark delivered failed: session=${dir.name}")
+        }
+    }
+
+    /** 放弃当前会话目录：撤掉活会话登记，之后交给清理按规则收走 */
+    private fun releaseSessionDir() {
+        CacheState.unregister(sessionDir)
+        sessionDir = null
+    }
+
     private companion object {
-        const val SHARED_DIR = "shared"
+        const val TAG = "hellorename"
         const val INCOMING_NAME = "_incoming"
         const val FALLBACK_MIME = "application/octet-stream"
         const val CHUNK_SIZE = 1048576L          // 1 MiB
         const val COPY_BUFFER = 65536
         const val MAX_STALLS = 3
-        const val SESSION_TTL_MS = 3600000L      // 1 小时
         const val PROGRESS_BYTE_STEP = 4194304L  // 4 MiB
         const val TOAST_NAME_MAX_CHARS = 32      // Android 12+ Toast 只有两行，文件名先掐短
         const val EXTERNAL_STORAGE_AUTHORITY = "com.android.externalstorage.documents"

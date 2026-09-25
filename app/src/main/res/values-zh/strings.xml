@@ -23,6 +23,7 @@
     <string name="status_copying_size">正在复制文件… %1$s</string>
     <string name="status_ready">复制完成，可以改名后发送了。</string>
     <string name="status_copy_failed">复制失败，点“发送”可重试。</string>
+    <string name="status_storage_low">存储空间不足，无法把文件复制进缓存；清理出空间后点“发送”重试。</string>
     <string name="status_rename_failed">重命名失败，文件名可能太长，请改短一些。</string>
     <string name="status_saving">正在保存到下载…</string>
     <string name="status_save_failed">保存失败。</string>
