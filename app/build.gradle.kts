@@ -107,7 +107,8 @@ kotlin {
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.19.1")
+    // core-ktx 1.19.x 的 AAR metadata 要求 compileSdk 37；本项目 compileSdk 固定 36，故用 1.18.0。
+    implementation("androidx.core:core-ktx:1.18.0")
     implementation("androidx.appcompat:appcompat:1.8.0")
     implementation("androidx.activity:activity-ktx:1.13.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.11.0")

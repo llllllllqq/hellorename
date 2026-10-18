@@ -10,7 +10,7 @@
 - **AGP 8.5.2 → 9.4.1**，**Gradle 8.9 → 9.6.0**，**Kotlin 2.0.21 → 2.4.21**。
 - 按 AGP 9 的 **built-in Kotlin** 迁移：移除 `org.jetbrains.kotlin.android` 插件；在根 `build.gradle.kts` 的 `buildscript` classpath 中显式指定 KGP 2.4.21，避免沿用 AGP 内置的旧 KGP。
 - release 构建改用 AGP 9.3+ 的 `optimization { enable = false }` DSL，保持当前“不混淆、不 shrink”的行为。
-- AndroidX 依赖升级到当前 stable：core-ktx 1.19.1、appcompat 1.8.0、activity 1.13.0、lifecycle 2.11.0、material 1.14.0、coroutines 1.11.0；AndroidX Test 升到 runner 1.7.0 / ext-junit 1.3.0 / espresso 3.7.0。
+- AndroidX 依赖升级到当前 stable：core-ktx 1.18.0、appcompat 1.8.0、activity 1.13.0、lifecycle 2.11.0、material 1.14.0、coroutines 1.11.0；AndroidX Test 升到 runner 1.7.0 / ext-junit 1.3.0 / espresso 3.7.0。
 - `compileSdk = 36`、`targetSdk = 36`，`minSdk 24` 不变；Build Tools 使用 AGP 9.4 默认的 36.0.0。
 
 ### Changed（Android 16 行为）
