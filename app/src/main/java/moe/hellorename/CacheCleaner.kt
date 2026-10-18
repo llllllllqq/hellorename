@@ -33,8 +33,11 @@ object CacheCleaner {
     /** 两次清理之间的最小间隔：清理不再只发生在冷启动，但也不该每次分享都全盘扫一遍 */
     const val MIN_CLEANUP_INTERVAL_MS = 10 * 60 * 1000L
 
-    /** 复制前的预留余量：不把 /data 写到一滴不剩，给系统和别的 App 留活路 */
+    /** 复制前的预留余量上限：不把 /data 写到一滴不剩，给系统和别的 App 留活路 */
     const val SPACE_RESERVE_BYTES = 32L * 1024 * 1024
+
+    /** 未知大小（pipe/恶意 Provider）的流最多复制这么多，防止无限流把设备填满 */
+    const val MAX_UNKNOWN_STREAM_BYTES = 2L * 1024 * 1024 * 1024
 
     /** 一个会话在清理视角下的画像（纯数据，方便单测直接构造） */
     data class Session(
@@ -81,6 +84,17 @@ object CacheCleaner {
     }
 
     /**
+     * 动态预留量：最多 32MB，但绝不超过剩余空间的 1/4。
+     *
+     * 旧实现固定要求“剩余 - 文件 >= 32MB”，于是只剩 20MB 的设备连一个 1KB 文件都不让复制。
+     * 现在 20MB 只剩 5MB 预留，小文件可以正常复制；空间越紧张，预留也越小。
+     */
+    fun reserveBytes(freeBytes: Long): Long {
+        if (freeBytes <= 0L) return 0L
+        return minOf(SPACE_RESERVE_BYTES, freeBytes / 4)
+    }
+
+    /**
      * 剩余空间 [freeBytes] 够不够放 [needBytes]。
      *
      * 任一数值不可信（<= 0：pipe 型 Provider 报不出大小、系统读不到剩余空间）就不拦，
@@ -89,7 +103,18 @@ object CacheCleaner {
     fun hasRoomFor(freeBytes: Long, needBytes: Long): Boolean {
         if (needBytes <= 0L) return true
         if (freeBytes <= 0L) return true
-        return freeBytes - needBytes >= SPACE_RESERVE_BYTES
+        return freeBytes - needBytes >= reserveBytes(freeBytes)
+    }
+
+    /**
+     * 未知大小流的字节上限：min(2GB, 可写空间 - 动态预留)。
+     * 空间读不到（<= 0）时只保留 2GB 硬上限，不能无限写。
+     */
+    fun maxBytesForUnknownStream(freeBytes: Long): Long {
+        if (freeBytes <= 0L) return MAX_UNKNOWN_STREAM_BYTES
+        val available = freeBytes - reserveBytes(freeBytes)
+        if (available <= 0L) return 0L
+        return minOf(MAX_UNKNOWN_STREAM_BYTES, available)
     }
 
     /** 写入失败是不是“空间不足”引起的（各 ROM 的异常文案不一致，这里按关键词认） */
@@ -98,16 +123,22 @@ object CacheCleaner {
         var depth = 0
         while (current != null && depth++ < MAX_CAUSE_DEPTH) {
             val message = current.message?.lowercase().orEmpty()
-            if (message.contains("enospc") ||
-                message.contains("no space") ||
-                message.contains("space left")
-            ) {
-                return true
-            }
+            if (NO_SPACE_MARKERS.any { message.contains(it) }) return true
             current = current.cause
         }
         return false
     }
+
+    private val NO_SPACE_MARKERS = listOf(
+        "enospc",
+        "no space",
+        "space left",
+        "not enough space",
+        "disk full",
+        "quota",
+        "insufficient storage",
+        "storage full",
+    )
 
     private const val MAX_CAUSE_DEPTH = 5
 }
@@ -144,6 +175,12 @@ object CacheState {
      */
     @Synchronized
     fun shouldCleanup(now: Long, force: Boolean): Boolean {
+        // 系统时钟被回拨时 now - lastCleanupAt 会变成负数，旧实现会因此永久节流。
+        // 把回拨当成“间隔已到”，重置基准后放行一次。
+        if (now < lastCleanupAt) {
+            lastCleanupAt = now
+            return true
+        }
         if (!force && now - lastCleanupAt < CacheCleaner.MIN_CLEANUP_INTERVAL_MS) return false
         lastCleanupAt = now
         return true

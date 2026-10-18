@@ -3,12 +3,14 @@ package moe.hellorename
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.ClipData
+import android.content.ComponentName
 import android.content.ContentValues
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.ParcelFileDescriptor
 import android.os.storage.StorageManager
 import android.provider.DocumentsContract
 import android.provider.MediaStore
@@ -22,19 +24,29 @@ import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.color.MaterialColors
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import moe.hellorename.databinding.ActivityMainBinding
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileNotFoundException
 import java.io.FileOutputStream
+import java.io.IOException
+import java.io.InputStream
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * 分享接收 → 改名 → 再分享 / 保存到下载。全应用零权限、纯前台 Activity。
@@ -48,6 +60,10 @@ import java.util.Locale
  *    落在磁盘上，否则一重启就失效。
  *  - 缓存清理的规则与磁盘操作都在 [CacheCleaner] / [CacheStore]（纯 java.io，可单测），
  *    本类只负责“在正确的线程、正确的时机调用它，并把还活着的会话登记进 [CacheState]”。
+ *
+ * v1.3.2 起，所有会改动界面的异步操作都带一个 [OperationRegistry] 的 token：
+ * 新分享、重置、Activity 重建都会换代，旧任务回到主线程后只允许清理自己的半成品，
+ * 不允许再更新 UI、写交付标记或 finish。
  */
 class MainActivity : AppCompatActivity() {
 
@@ -71,40 +87,58 @@ class MainActivity : AppCompatActivity() {
     private var sessionDir: File? = null
     private var currentFile: File? = null  // 缓存里代表“当前文件名”的那个文件
     private var copyJob: Job? = null
+    private var prepareJob: Job? = null
+    private var saveJob: Job? = null
+    private var backgroundJob: Job? = null
     private var copyDone = false
 
     /** 已经交给系统分享面板的绝对路径，不允许再被 rename/删除 */
     private val handedOutPaths = mutableSetOf<String>()
 
-    private var lastPercent = -1
-    private var lastReportedBytes = 0L
+    private val lastPercent = AtomicInteger(-1)
+    private val lastReportedBytes = AtomicLong(0L)
 
-    /** 复制会话号：每次开始新复制自增；旧会话的迟到进度回调一律丢弃（修“卡在 100%”的根源） */
-    private var copySession = 0
+    /** 操作代际：新分享/重置/重建都会换代 */
+    private val operations = OperationRegistry()
 
-    /** 已给出最终结果（完成/失败）的会话号；同一会话之后到达的进度回调同样丢弃 */
-    private var finishedSession = -1
+    /** 已经出过最终结果的代际：之后迟到的进度回调一律丢弃 */
+    @Volatile
+    private var finishedGeneration = -1L
+
+    /** 会话目录号，只用于生成目录名；随机后缀由 [CacheStore.newSessionName] 提供 */
+    private var sessionCounter = 0
+
+    /** 元数据查询还在进行：期间不要因为 onStart 自动重试复制 */
+    private var loadingMeta = false
 
     /** SAF 选择器打开期间暂存“待保存”的缓存文件 */
     private var savePendingFile: File? = null
+    private var saveGeneration = 0L
 
     /** 改名（含重复复制）正在进行：期间禁用按钮，并忽略再次触发 */
     private var preparingFile = false
 
+    /** 保存操作进行中（用于重建后提示“上次保存被中断”） */
+    private var wasSaving = false
+
     /** null = 扩展名可编辑；非 null = 扩展名锁定为该值（可能是空串） */
     private var lockedExt: String? = null
 
+    /** 第一次 onStart 不算“从后台回来”，避免和异步元数据查询抢着启动复制 */
+    private var startedOnce = false
+
+    /**
+     * 与 Activity 生命周期解耦的清理协程：取消操作时要把半成品删掉，
+     * 但这时 lifecycleScope 可能已经跟着 Activity 一起被取消了。
+     */
+    private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** 拿到 MediaStore 插入的 URI 后立刻记下；Activity 在复制中途被销毁时用它兜底删除 */
+    @Volatile
+    private var pendingMediaUri: Uri? = null
+
     private val pickFile = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            // SAF 的授权可以持久化，顺手记下来（普通分享的 URI 会抛异常，忽略即可）
-            try {
-                contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                )
-            } catch (_: Throwable) {
-                // ignore
-            }
             loadSource(uri, extraCount = 1)
         }
     }
@@ -115,34 +149,80 @@ class MainActivity : AppCompatActivity() {
             val source = savePendingFile
             savePendingFile = null
             val dest = result.data?.data
-            if (source == null || result.resultCode != Activity.RESULT_OK || dest == null) {
-                // 用户取消或没拿到目标 URI：恢复按钮与状态文案，缓存文件原封不动
-                setButtonsEnabled(copyDone)
-                setStatus(getString(R.string.status_save_canceled), isError = false)
+            val generation = saveGeneration
+
+            if (source == null) {
+                // 旧回调/Activity 重建后状态丢失：目标文档可能已经被 DocumentsUI 创建，
+                // 能删就删，绝不能再写一个没人知道的半成品。
+                if (dest != null) cleanupScope.launch { cleanupDocument(dest) }
+                if (operations.isCurrent(generation)) {
+                    wasSaving = false
+                    setButtonsEnabled(copyDone)
+                    setStatus(getString(R.string.status_save_canceled), isError = false)
+                }
                 return@registerForActivityResult
             }
-            binding.saveButton.isEnabled = false
-            setStatus(getString(R.string.status_saving), isError = false)
-            lifecycleScope.launch {
-                val ok = withContext(Dispatchers.IO) {
-                    val written = writeToUri(source, dest)
-                    if (written) markDelivered(source)
-                    written
+            if (result.resultCode != Activity.RESULT_OK || dest == null) {
+                if (operations.isCurrent(generation)) {
+                    wasSaving = false
+                    setButtonsEnabled(copyDone)
+                    setStatus(getString(R.string.status_save_canceled), isError = false)
                 }
-                if (ok) {
-                    // 真的写进去了才算交付过，之后这条路径不许再被 rename/删除
+                return@registerForActivityResult
+            }
+            if (!operations.isCurrent(generation) || !source.isFile) {
+                // 这次保存已经被新分享/重置取代，目标 URI 是刚创建的，清理掉。
+                cleanupScope.launch { cleanupDocument(dest) }
+                return@registerForActivityResult
+            }
+
+            binding.saveButton.isEnabled = false
+            binding.progress.isIndeterminate = true
+            binding.progress.progress = 0
+            binding.progress.visibility = View.VISIBLE
+            setStatus(getString(R.string.status_saving), isError = false)
+            wasSaving = true
+            saveJob = lifecycleScope.launch {
+                val write = try {
+                    withContext(Dispatchers.IO) {
+                        writeToUri(source, dest) { !operations.isCurrent(generation) }
+                    }
+                } catch (cancel: CancellationException) {
+                    withContext(NonCancellable + Dispatchers.IO) { cleanupDocument(dest) }
+                    throw cancel
+                } catch (_: Throwable) {
+                    withContext(NonCancellable + Dispatchers.IO) { cleanupDocument(dest) }
+                    WriteResult(ok = false, bytes = 0L, incomplete = true)
+                }
+                binding.progress.visibility = View.GONE
+                if (!operations.isCurrent(generation)) {
+                    withContext(NonCancellable + Dispatchers.IO) { cleanupDocument(dest) }
+                    return@launch
+                }
+                wasSaving = false
+                if (write.ok) {
+                    withContext(Dispatchers.IO) { markDelivered(source) }
                     handedOutPaths.add(source.absolutePath)
                     finishWithToast(
-                        getString(R.string.toast_saved, ellipsizeForToast(source.name)),
+                        getString(R.string.toast_saved, FileNameUtils.ellipsizeForToast(source.name)),
                     )
                 } else {
-                    setStatus(getString(R.string.status_save_failed), isError = true)
+                    setButtonsEnabled(copyDone)
+                    setStatus(
+                        getString(
+                            if (write.incomplete) {
+                                R.string.status_save_incomplete
+                            } else {
+                                R.string.status_save_failed
+                            },
+                        ),
+                        isError = true,
+                    )
                     Toast.makeText(
                         applicationContext,
                         R.string.toast_save_failed,
                         Toast.LENGTH_LONG,
                     ).show()
-                    setButtonsEnabled(copyDone)
                 }
             }
         }
@@ -157,10 +237,16 @@ class MainActivity : AppCompatActivity() {
         binding.pickButton.setOnClickListener { pickFile.launch(arrayOf("*/*")) }
         binding.allowExtCheck.setOnCheckedChangeListener { _, isChecked -> applyExtLock(!isChecked) }
 
-        // 冷启动强制清一次：删除是真实磁盘操作，必须离开主线程（旧实现在这里同步删，攒几个大文件就卡启动）
-        // 顺序上不再需要“先清理再建目录”来保命：当前会话会被 CacheState 登记为活会话
+        if (savedInstanceState != null) {
+            // 配置变更/进程重建：优先恢复，不再无条件重放原始 Intent。
+            restoreSession(savedInstanceState)
+        } else {
+            handleShareIntent(intent)
+        }
+
+        // 冷启动强制清一次：删除是真实磁盘操作，必须离开主线程（旧实现在这里同步删，攒几个大文件就卡启动）。
+        // 放在恢复之后：恢复出来的会话要先登记成 live，清理才不会把它当成旧会话。
         startCleanup(force = true)
-        handleShareIntent(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -171,10 +257,54 @@ class MainActivity : AppCompatActivity() {
         handleShareIntent(intent)
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(KEY_HAS_SOURCE, hasLoadedState())
+        outState.putString(KEY_SOURCE_URI, sourceUri?.toString())
+        outState.putString(KEY_SOURCE_MIME, sourceMime)
+        outState.putString(KEY_ORIGINAL_NAME, originalName)
+        outState.putString(KEY_ORIGINAL_BASE, originalBase)
+        outState.putString(KEY_ORIGINAL_EXT, originalExt)
+        outState.putLong(KEY_SOURCE_SIZE, sourceSize)
+        outState.putString(KEY_SESSION_DIR, sessionDir?.absolutePath)
+        outState.putString(KEY_CURRENT_FILE, currentFile?.absolutePath)
+        outState.putBoolean(KEY_COPY_DONE, copyDone)
+        outState.putString(KEY_INPUT, binding.nameInput.text?.toString().orEmpty())
+        outState.putBoolean(KEY_EXT_LOCKED, lockedExt != null)
+        outState.putString(KEY_LOCKED_EXT, lockedExt.orEmpty())
+        outState.putStringArrayList(KEY_HANDED_OUT, ArrayList(handedOutPaths))
+        outState.putString(KEY_SAVE_PENDING, savePendingFile?.absolutePath)
+        outState.putBoolean(KEY_WAS_SAVING, wasSaving || saveJob?.isActive == true)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        backgroundJob?.cancel()
+        backgroundJob = null
+        if (sessionDir != null) CacheState.register(sessionDir!!)
+        if (startedOnce) {
+            // 从后台回来：缓存可能已经被 30 分钟宽限后的清理收走，自动重试一次复制。
+            maybeRetryCopy()
+        }
+        startedOnce = true
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (!isChangingConfigurations && !isFinishing) {
+            scheduleBackgroundGrace()
+        }
+    }
+
     override fun onDestroy() {
-        super.onDestroy()
+        // 让迟到进度回调立即失效，而不是等到新 Activity 换代
+        operations.invalidate()
+        cancelOperations()
+        backgroundJob?.cancel()
+        backgroundJob = null
         // 界面没了就不再是“活会话”：交过货的由交付标记保温，没交过货的留给下一次清理收走
         CacheState.unregister(sessionDir)
+        super.onDestroy()
     }
 
     // ---------------------------------------------------------------- 入口解析
@@ -182,87 +312,154 @@ class MainActivity : AppCompatActivity() {
     private fun handleShareIntent(intent: Intent?) {
         val action = intent?.action
         val isShare = action == Intent.ACTION_SEND || action == Intent.ACTION_SEND_MULTIPLE
-        val uris = if (isShare) collectUris(intent) else emptyList()
+        if (!isShare) {
+            // ACTION_MAIN / 其它入口：已经加载了文件就不要清空（H1/L6）。
+            if (!hasLoadedState()) showEmptyState()
+            return
+        }
 
+        val uris = collectUris(intent)
         when {
             uris.isNotEmpty() -> loadSource(uris.first(), uris.size)
-            isShare -> {
+            hasLoadedState() -> {
+                // 纯文本分享：保留当前文件，只提示这次没有文件。
+                setStatus(getString(R.string.status_text_only), isError = true)
+            }
+            else -> {
                 showEmptyState()
                 setStatus(getString(R.string.status_text_only), isError = true)
             }
-            else -> showEmptyState()
         }
     }
 
+    /**
+     * 读取 Intent 里的文件 URI。
+     *
+     * EXTRA_STREAM 可能是 Uri、ArrayList&lt;Uri&gt;、Parcelable[]，也可能是恶意/异常 Parcelable。
+     * 旧实现用带泛型的 getParcelableExtra，遇到非 Uri 的 Parcelable 会在强转时崩溃；
+     * 这里统一从 Bundle 取原始值再按类型筛选，所有解析异常都按“没有文件”处理。
+     */
     private fun collectUris(intent: Intent): List<Uri> {
         val out = LinkedHashSet<Uri>()
-        intent.clipData?.let { clip ->
-            for (i in 0 until clip.itemCount) {
-                clip.getItemAt(i).uri?.let { out.add(it) }
+        try {
+            intent.clipData?.let { clip ->
+                for (index in 0 until clip.itemCount) {
+                    clip.getItemAt(index).uri?.let { out.add(it) }
+                }
             }
+        } catch (_: Throwable) {
+            // 坏 Parcelable：当作没有 clipData
         }
-        @Suppress("DEPRECATION")
-        intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.let { out.add(it) }
-        @Suppress("DEPRECATION")
-        intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let { out.addAll(it) }
+        try {
+            @Suppress("DEPRECATION")
+            val raw = intent.extras?.get(Intent.EXTRA_STREAM)
+            addStreamValue(raw, out)
+        } catch (_: Throwable) {
+            // BadParcelableException / ClassCastException 等：当作没有文件
+        }
         return out.filter { it.scheme == "content" || it.scheme == "file" }
     }
 
+    private fun addStreamValue(value: Any?, out: MutableSet<Uri>) {
+        when (value) {
+            is Uri -> out.add(value)
+            is Array<*> -> value.filterIsInstance<Uri>().forEach(out::add)
+            is Iterable<*> -> value.filterIsInstance<Uri>().forEach(out::add)
+            else -> Unit
+        }
+    }
+
+    private fun hasLoadedState(): Boolean =
+        sourceUri != null ||
+            currentFile != null ||
+            originalName.isNotEmpty() ||
+            !binding.nameInput.text.isNullOrEmpty()
+
+    /**
+     * 加载一个新的分享源。Provider 查询（getType/query）全部放到 IO：
+     * 慢 Provider 或恶意 Provider 不能再用 Binder 调用把主线程卡到 ANR（H4）。
+     */
     private fun loadSource(uri: Uri, extraCount: Int) {
-        copyJob?.cancel()
-        copyJob = null
-        copyDone = false
-        currentFile = null
-        handedOutPaths.clear()
+        val generation = operations.begin()
+        cancelOperations()
+        releaseSessionDir()
+        loadingMeta = true
 
         sourceUri = uri
-        sourceMime = try {
+        sourceMime = null
+        originalName = ""
+        originalBase = ""
+        originalExt = ""
+        sourceSize = -1L
+        currentFile = null
+        copyDone = false
+        preparingFile = false
+        wasSaving = false
+        savePendingFile = null
+        handedOutPaths.clear()
+
+        binding.oldNameText.text = getString(R.string.old_name_loading)
+        binding.pickButton.visibility = View.GONE
+        binding.allowExtCheck.setOnCheckedChangeListener(null)
+        binding.allowExtCheck.isChecked = false
+        binding.allowExtCheck.isEnabled = false
+        binding.allowExtCheck.setOnCheckedChangeListener { _, isChecked -> applyExtLock(!isChecked) }
+        setInput("")
+        binding.hintText.text = getString(R.string.hint_no_ext)
+        binding.progress.isIndeterminate = true
+        binding.progress.progress = 0
+        binding.progress.visibility = View.VISIBLE
+        setButtonsEnabled(false)
+        setStatus(getString(R.string.status_copying), isError = false)
+
+        lifecycleScope.launch {
+            val meta = withContext(Dispatchers.IO) { readSourceMeta(uri) }
+            if (!isActive || !operations.isCurrent(generation)) return@launch
+            loadingMeta = false
+
+            sourceMime = meta.mime
+            sourceSize = meta.size
+            var display = meta.name
+            if (display.isBlank()) display = getString(R.string.fallback_name)
+            originalName = display
+            val parts = FileNameUtils.split(display)
+            originalBase = parts.base
+            originalExt = parts.ext
+
+            binding.oldNameText.text = originalName
+            binding.pickButton.visibility = View.GONE
+            lockedExt = originalExt
+            binding.allowExtCheck.setOnCheckedChangeListener(null)
+            binding.allowExtCheck.isChecked = false
+            binding.allowExtCheck.isEnabled = originalExt.isNotEmpty()
+            binding.allowExtCheck.setOnCheckedChangeListener { _, isChecked -> applyExtLock(!isChecked) }
+            setInput(originalBase)
+            updateHint()
+
+            if (extraCount > 1) {
+                setStatus(
+                    resources.getQuantityString(R.plurals.status_multi, extraCount, extraCount),
+                    isError = false,
+                )
+            } else {
+                setStatus(getString(R.string.status_copying), isError = false)
+            }
+            startCopy(uri, generation)
+        }
+    }
+
+    /** 源文件的名字、大小与 MIME（SIZE 拿不到时返回 -1：pipe 型 Provider 报不出来） */
+    private class SourceMeta(val name: String, val size: Long, val mime: String?)
+
+    private fun readSourceMeta(uri: Uri): SourceMeta {
+        val mime = try {
             contentResolver.getType(uri)
         } catch (_: Throwable) {
             null
         }
-
-        val meta = querySourceMeta(uri)
-        sourceSize = meta.size
-        var display = meta.name
-        if (display.isBlank()) display = getString(R.string.fallback_name)
-        originalName = display
-        val parts = FileNameUtils.split(display)
-        originalBase = parts.base
-        originalExt = parts.ext
-
-        binding.oldNameText.text = originalName
-        binding.pickButton.visibility = View.GONE
-
-        // 默认锁定扩展名
-        lockedExt = originalExt
-        binding.allowExtCheck.setOnCheckedChangeListener(null)
-        binding.allowExtCheck.isChecked = false
-        binding.allowExtCheck.isEnabled = originalExt.isNotEmpty()
-        binding.allowExtCheck.setOnCheckedChangeListener { _, isChecked -> applyExtLock(!isChecked) }
-        setInput(originalBase)
-        updateHint()
-
-        if (extraCount > 1) {
-            setStatus(
-                resources.getQuantityString(R.plurals.status_multi, extraCount, extraCount),
-                isError = false,
-            )
-        } else {
-            setStatus(getString(R.string.status_copying), isError = false)
-        }
-
-        startCopy(uri)
-    }
-
-    /** 源文件的名字与大小（SIZE 拿不到时返回 -1：pipe 型 Provider 报不出来） */
-    private class SourceMeta(val name: String, val size: Long)
-
-    private fun querySourceMeta(uri: Uri): SourceMeta {
         var name = ""
         var size = -1L
         try {
-            // 名字和大小一次查完：多开一次 cursor 只是白花钱
             contentResolver.query(
                 uri,
                 arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
@@ -287,75 +484,205 @@ class MainActivity : AppCompatActivity() {
         if (name.isBlank()) {
             name = uri.lastPathSegment?.substringAfterLast('/').orEmpty()
         }
-        return SourceMeta(name.trim(), size)
+        return SourceMeta(name.trim(), size, mime)
+    }
+
+    // ---------------------------------------------------------------- 状态恢复
+
+    /**
+     * 从 savedInstanceState 恢复完整会话：源/文件/输入/扩展名锁定/交付路径/SAF 待保存文件。
+     * 复制没完成或文件已经被清掉时自动重试；保存被中断时只提示、不自动重放（避免重复写 Downloads）。
+     */
+    private fun restoreSession(state: Bundle) {
+        val generation = operations.begin()
+        val hadSource = state.getBoolean(KEY_HAS_SOURCE, false)
+        if (!hadSource) {
+            showEmptyState()
+            return
+        }
+        val savedInput = state.getString(KEY_INPUT)
+        val savedInputForEmpty = savedInput.orEmpty()
+
+        @Suppress("DEPRECATION")
+        sourceUri = state.getString(KEY_SOURCE_URI)?.let(Uri::parse)
+        sourceMime = state.getString(KEY_SOURCE_MIME)
+        originalName = state.getString(KEY_ORIGINAL_NAME).orEmpty()
+        originalBase = state.getString(KEY_ORIGINAL_BASE).orEmpty()
+        originalExt = state.getString(KEY_ORIGINAL_EXT).orEmpty()
+        sourceSize = state.getLong(KEY_SOURCE_SIZE, -1L)
+        copyDone = state.getBoolean(KEY_COPY_DONE, false)
+
+        val savedDir = state.getString(KEY_SESSION_DIR)?.let(::File)
+        sessionDir = savedDir?.takeIf { isSessionDir(it) }
+        val savedFile = state.getString(KEY_CURRENT_FILE)?.let(::File)
+        currentFile = savedFile?.takeIf { it.isFile && isUnderSharedRoot(it) }
+        if (sessionDir == null) {
+            sessionDir = currentFile?.parentFile?.takeIf { isSessionDir(it) }
+        }
+        if (currentFile == null) copyDone = false
+
+        lockedExt = if (state.getBoolean(KEY_EXT_LOCKED, false)) {
+            state.getString(KEY_LOCKED_EXT).orEmpty()
+        } else {
+            null
+        }
+        handedOutPaths.clear()
+        state.getStringArrayList(KEY_HANDED_OUT)?.forEach { handedOutPaths.add(it) }
+
+        val savedPending = state.getString(KEY_SAVE_PENDING)?.let(::File)
+        savePendingFile = savedPending?.takeIf { it.isFile && isUnderSharedRoot(it) }
+
+        binding.oldNameText.text =
+            if (originalName.isBlank()) getString(R.string.old_name_none) else originalName
+        binding.pickButton.visibility = if (sourceUri != null) View.GONE else View.VISIBLE
+        binding.allowExtCheck.setOnCheckedChangeListener(null)
+        binding.allowExtCheck.isChecked = lockedExt == null
+        binding.allowExtCheck.isEnabled = originalExt.isNotEmpty()
+        binding.allowExtCheck.setOnCheckedChangeListener { _, isChecked -> applyExtLock(!isChecked) }
+        setInput(savedInput ?: originalBase)
+        updateHint()
+        binding.progress.visibility = View.GONE
+        lastPercent.set(-1)
+        lastReportedBytes.set(0L)
+
+        if (savePendingFile != null) {
+            // SAF 选择器还开着（或结果还没回来）：恢复待保存文件，等回调。
+            saveGeneration = generation
+            wasSaving = true
+            setButtonsEnabled(false)
+            setStatus(getString(R.string.status_saving), isError = false)
+            if (sessionDir != null) CacheState.register(sessionDir!!)
+            return
+        }
+
+        if (copyDone && currentFile != null) {
+            if (sessionDir != null) CacheState.register(sessionDir!!)
+            setButtonsEnabled(true)
+            setStatus(
+                getString(
+                    if (state.getBoolean(KEY_WAS_SAVING, false)) {
+                        R.string.status_save_interrupted
+                    } else {
+                        R.string.status_ready
+                    },
+                ),
+                isError = state.getBoolean(KEY_WAS_SAVING, false),
+            )
+            return
+        }
+
+        val uri = sourceUri
+        if (uri != null) {
+            // 复制没完成：保留输入，自动重试；失败时状态栏会明确提示。
+            setButtonsEnabled(false)
+            setStatus(getString(R.string.status_copying), isError = false)
+            startCopy(uri, generation)
+            return
+        }
+
+        showEmptyState()
+        // 只有输入、没有文件的状态也保留用户已经敲进去的名字
+        if (savedInputForEmpty.isNotEmpty()) setInput(savedInputForEmpty)
+    }
+
+    private fun isUnderSharedRoot(file: File): Boolean = try {
+        val root = sharedRoot.canonicalPath
+        val path = file.canonicalPath
+        path.startsWith(root + File.separator)
+    } catch (_: Throwable) {
+        false
+    }
+
+    private fun isSessionDir(dir: File): Boolean = try {
+        dir.isDirectory && dir.parentFile?.canonicalPath == sharedRoot.canonicalPath
+    } catch (_: Throwable) {
+        false
     }
 
     // ---------------------------------------------------------------- 复制到缓存
 
-    private fun startCopy(uri: Uri) {
-        // 先取消上一次复制并换会话号：被取消协程里的 IO 循环可能还会吐出几个进度回调，
-        // 它们只认旧会话号，永远覆盖不掉新会话的最终状态（“卡在 100%”的根源）
+    private fun startCopy(uri: Uri, generation: Long = operations.begin()) {
+        if (!operations.isCurrent(generation)) return
         copyJob?.cancel()
-        val session = ++copySession
-        // 上一个会话目录（重试/被系统回收后重新复制）就此放弃：不撤登记的话，
-        // 它会一直被当成“活会话”，在本进程生命周期内再也不会被清理
         releaseSessionDir()
-
-        // 新建会话时顺手清理一次（节流）：清理不再只发生在冷启动，
-        // 长期存活的进程也不会让缓存无限涨
         startCleanup(force = false)
+        loadingMeta = false
 
-        // 目录名带上会话号：只用毫秒时间戳时，同一毫秒内的两次复制会命中同一个已存在的目录
-        // （mkdirs 因目录存在而“成功”），两次会话共用 _incoming<ext>，后一次覆盖前一次
-        val dir = File(sharedRoot, CacheStore.newSessionName(System.currentTimeMillis(), session))
-        if (!dir.exists() && !dir.mkdirs()) {
-            copyJob = null
+        // 目录名带时间戳 + 会话号 + UUID：时钟回拨/进程重启/同毫秒都不会复用旧目录。
+        var dir: File
+        var attempts = 0
+        do {
+            dir = File(sharedRoot, CacheStore.newSessionName(System.currentTimeMillis(), ++sessionCounter))
+            attempts++
+        } while (dir.exists() && attempts < 4)
+        if (dir.exists()) {
             copyDone = false
-            // 按钮保持可点：再点一次会换一个新的会话目录重试，别把界面变成死路
+            currentFile = null
             setButtonsEnabled(true)
             setStatus(getString(R.string.status_copy_failed), isError = true)
             return
         }
-        // 登记为“本进程正在用”：清理逻辑绝不允许碰它
-        CacheState.register(dir)
+
         // 临时文件名只借用规范化后的扩展名：originalExt 直接来自对方应用的 DISPLAY_NAME，
         // 可能超长或含 `/ \ :` 等字符，不能原样拼进路径
-        val incomingExt = FileNameUtils.sanitizeExt(originalExt)
-        val target = File(dir, INCOMING_NAME + incomingExt)
+        val target = File(dir, INCOMING_NAME + FileNameUtils.sanitizeExt(originalExt))
         sessionDir = dir
         currentFile = target
         copyDone = false
-        lastPercent = -1
-        lastReportedBytes = 0L
+        finishedGeneration = -1L
+        lastPercent.set(-1)
+        lastReportedBytes.set(0L)
+        CacheState.register(dir)
 
         binding.progress.isIndeterminate = true
         binding.progress.progress = 0
         binding.progress.visibility = View.VISIBLE
         setButtonsEnabled(false)
 
+        val copySize = sourceSize
         copyJob = lifecycleScope.launch {
-            val outcome = withContext(Dispatchers.IO) {
-                // 空间预检也在 IO 线程：它需要 statfs，而且空间不够时还要先真删一次旧会话
-                ensureRoomThenCopy(dir, uri, target, { !isActive }) { copied, total ->
-                    onCopyProgress(session, copied, total)
+            val outcome = try {
+                withContext(Dispatchers.IO) {
+                    // mkdirs 也是磁盘操作：放到 IO，失败走统一失败路径。
+                    if (!dir.isDirectory && !dir.mkdirs()) {
+                        return@withContext CopyOutcome.FAILED
+                    }
+                    ensureRoomThenCopy(dir, uri, target, copySize, generation) {
+                        !operations.isCurrent(generation)
+                    }
                 }
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (_: Throwable) {
+                CopyOutcome.FAILED
             }
+
             // 会话已换代或本协程被取消：什么都不许碰，避免把新状态覆盖掉
-            if (!isActive || session != copySession) return@launch
-            finishedSession = session
+            if (!isActive || !operations.isCurrent(generation)) return@launch
+            finishedGeneration = generation
             binding.progress.visibility = View.GONE
             copyDone = outcome == CopyOutcome.OK
-            // 成功可以交付；失败也保持可点（再点“发送/保存”会重新复制），两种情况都不留死路
             setButtonsEnabled(true)
             when (outcome) {
                 CopyOutcome.OK -> setStatus(getString(R.string.status_ready), isError = false)
                 CopyOutcome.NO_SPACE -> {
                     currentFile = null
-                    // 空间不足要说清楚：旧实现只说“复制失败”，用户根本不知道去清空间
+                    releaseSessionDir()
                     setStatus(getString(R.string.status_storage_low), isError = true)
+                }
+                CopyOutcome.TOO_LARGE -> {
+                    currentFile = null
+                    releaseSessionDir()
+                    setStatus(getString(R.string.status_too_large), isError = true)
+                }
+                CopyOutcome.SOURCE_UNAVAILABLE -> {
+                    currentFile = null
+                    releaseSessionDir()
+                    setStatus(getString(R.string.status_source_unavailable), isError = true)
                 }
                 CopyOutcome.FAILED -> {
                     currentFile = null
+                    releaseSessionDir()
                     setStatus(getString(R.string.status_copy_failed), isError = true)
                 }
             }
@@ -364,37 +691,37 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * 复制进度回调，来自 IO 线程，已做节流。
-     * [session] 是发起本次复制时的会话号：旧会话的迟到回调、以及本会话已经出过
+     * [generation] 是发起本次复制时的代际：旧代际的迟到回调、以及本代际已经出过
      * 最终结果之后的回调，一律丢弃——这正是“文案卡在 100% 不显示复制完成”的根源。
      */
-    private fun onCopyProgress(session: Int, copied: Long, total: Long) {
+    private fun onCopyProgress(generation: Long, copied: Long, total: Long) {
         if (total <= 0L) {
-            if (copied - lastReportedBytes < PROGRESS_BYTE_STEP) return
-            lastReportedBytes = copied
+            val previous = lastReportedBytes.get()
+            if (copied - previous < PROGRESS_BYTE_STEP) return
+            if (!lastReportedBytes.compareAndSet(previous, copied)) return
             val text = getString(R.string.status_copying_size, formatSize(copied))
             runOnUiThread {
-                if (isStale(session)) return@runOnUiThread
+                if (isStale(generation)) return@runOnUiThread
                 setStatus(text, isError = false)
             }
             return
         }
         val percent = ((copied * 100) / total).toInt().coerceIn(0, 100)
-        if (percent == lastPercent) return
-        lastPercent = percent
+        if (lastPercent.getAndSet(percent) == percent) return
         runOnUiThread {
-            if (isStale(session)) return@runOnUiThread
+            if (isStale(generation)) return@runOnUiThread
             binding.progress.isIndeterminate = false
             binding.progress.progress = percent
             setStatus(getString(R.string.status_copying_percent, percent), isError = false)
         }
     }
 
-    /** 旧会话（已被取代/取消）或已经出过最终结果的会话：迟到的进度更新一律丢弃 */
-    private fun isStale(session: Int): Boolean =
-        session != copySession || session == finishedSession
+    /** 旧代际（已被取代/取消）或已经出过最终结果的代际：迟到的进度更新一律丢弃 */
+    private fun isStale(generation: Long): Boolean =
+        !operations.isCurrent(generation) || generation == finishedGeneration
 
     /** 复制结果：只有 [OK] 才允许继续交付 */
-    private enum class CopyOutcome { OK, NO_SPACE, FAILED }
+    private enum class CopyOutcome { OK, NO_SPACE, TOO_LARGE, SOURCE_UNAVAILABLE, FAILED }
 
     /**
      * 复制前的空间预检 + 复制。
@@ -409,15 +736,21 @@ class MainActivity : AppCompatActivity() {
         dir: File,
         uri: Uri,
         target: File,
+        need: Long,
+        generation: Long,
         cancelled: () -> Boolean,
-        onProgress: (Long, Long) -> Unit,
     ): CopyOutcome {
-        val need = sourceSize
         if (need > 0L && !CacheCleaner.hasRoomFor(writableSpace(dir), need)) {
             cleanupCache(force = true)
             if (!CacheCleaner.hasRoomFor(writableSpace(dir), need)) return CopyOutcome.NO_SPACE
         }
-        return copyUriToFile(uri, target, cancelled, onProgress)
+        // 已知大小按实际大小校验；未知/报 0 的流用 2GB 与“剩余空间 - 动态预留”的较小值兜底。
+        val maxBytes = if (need > 0L) {
+            -1L
+        } else {
+            CacheCleaner.maxBytesForUnknownStream(writableSpace(dir))
+        }
+        return copyUriToFile(uri, target, cancelled, maxBytes, generation)
     }
 
     /**
@@ -443,118 +776,181 @@ class MainActivity : AppCompatActivity() {
      * 复制源 URI 到本地文件。
      *
      * 快路径用 file descriptor + FileChannel.transferTo；但 transferTo 允许“少传”甚至返回 0，
-     * 所以**只有能拿到 statSize 时才走它**，并且必须用 statSize 校验字节数：
-     *  - 拿不到 statSize（管道型 Provider，`statSize` 返回 -1）→ 快路径无法校验，直接走流复制；
-     *  - 校验不符（少传/静默失败）→ 丢掉半成品，同样退回 64 KiB 流复制。
+     * 所以**只有 statSize > 0 时才走它**，并且必须用 statSize 校验字节数：
+     *  - statSize == 0：不再走“空文件成功”快路径，统一读流到 EOF，避免 pseudo-file 报 0 但有内容；
+     *  - statSize < 0（管道型 Provider）：直接复用已经打开的 PFD 做流复制，不重复 open；
+     *  - 快路径校验不符：丢掉半成品，改走流复制。
      * 两条兜底路径都不会把不完整的文件当成成功。
-     *
-     * [cancelled] 返回 true 时立即中止（协程被取消后的协作式出口），半成品文件直接丢弃。
      */
     private fun copyUriToFile(
         uri: Uri,
         target: File,
         cancelled: () -> Boolean,
-        onProgress: (Long, Long) -> Unit,
+        maxBytes: Long,
+        generation: Long,
     ): CopyOutcome {
-        var outcome = CopyOutcome.FAILED
+        var pfd: ParcelFileDescriptor? = null
         try {
-            contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-                val statSize = try {
-                    pfd.statSize
+            pfd = contentResolver.openFileDescriptor(uri, "r")
+            if (pfd == null) {
+                return streamCopyFromUri(uri, target, cancelled, maxBytes, generation)
+            }
+            val statSize = try {
+                pfd.statSize
+            } catch (_: Throwable) {
+                -1L
+            }
+            if (statSize > 0L) {
+                // Provider 可能报 SIZE=-1（所以走了未知大小上限），但 statSize 却是一个很大的值；
+                // 在写任何字节之前用同一上限拦掉，避免“先写满磁盘再失败”。
+                if (maxBytes >= 0L && statSize > maxBytes) {
+                    target.delete()
+                    return CopyOutcome.TOO_LARGE
+                }
+                val fast = tryFastCopy(pfd, target, statSize, cancelled, generation)
+                if (fast == CopyOutcome.OK) return CopyOutcome.OK
+                target.delete()
+                if (cancelled()) return CopyOutcome.FAILED
+                // 快路径失败/少传：先关掉 PFD，再重新开流从 0 开始复制。
+                // 对“只允许同时打开一次”的 Provider，不先关会导致重开直接失败。
+                try {
+                    pfd.close()
                 } catch (_: Throwable) {
-                    -1L
+                    // ignore
                 }
-                if (statSize >= 0L) {
-                    FileInputStream(pfd.fileDescriptor).use { input ->
-                        FileOutputStream(target).use { output ->
-                            val inChannel = input.channel
-                            val outChannel = output.channel
-                            var position = 0L
-                            var total = 0L
-                            var stalls = 0
-                            while (!cancelled()) {
-                                val moved = inChannel.transferTo(position, CHUNK_SIZE, outChannel)
-                                if (moved <= 0L) {
-                                    if (++stalls >= MAX_STALLS) break
-                                    continue
-                                }
-                                stalls = 0
-                                position += moved
-                                total += moved
-                                onProgress(total, statSize)
-                            }
-                            // 字节数对不上就不算成功（含被取消的情况）
-                            if (!cancelled() && total == statSize) outcome = CopyOutcome.OK
-                        }
-                    }
-                }
+                pfd = null
+                return streamCopyFromUri(uri, target, cancelled, maxBytes, generation)
+            }
+            // statSize <= 0：空文件或未知大小，统一走流复制，读到 EOF 才算完成。
+            // 复用已经打开的 PFD，避免对“只允许打开一次”的 Provider 再开一次流。
+            return FileInputStream(pfd.fileDescriptor).use { input ->
+                streamCopy(
+                    input = input,
+                    target = target,
+                    cancelled = cancelled,
+                    maxBytes = maxBytes,
+                    generation = generation,
+                )
             }
         } catch (error: Throwable) {
-            outcome = if (CacheCleaner.isNoSpace(error)) CopyOutcome.NO_SPACE else CopyOutcome.FAILED
+            target.delete()
+            return outcomeFor(error)
+        } finally {
+            if (pfd != null) {
+                try {
+                    pfd.close()
+                } catch (_: Throwable) {
+                    // fd 已经由 FileInputStream 关闭时这里会失败，忽略
+                }
+            }
         }
-        if (outcome == CopyOutcome.OK) return CopyOutcome.OK
-
-        // 半成品一律丢掉，改用下面的流复制重来一遍
-        target.delete()
-        if (cancelled()) return CopyOutcome.FAILED
-        // 这里不因为快路径判了 NO_SPACE 就提前返回：isNoSpace 是按异常文案认的，可能误判，
-        // 而真没空间时流复制自己也会认出同一个判定——多试一次的代价远小于误报"空间不足"
-        return streamCopyToFile(uri, target, cancelled, onProgress)
     }
 
-    /** 兜底复制：64 KiB 缓冲，读到 EOF（-1）才算完整；取消则丢弃半成品。 */
-    private fun streamCopyToFile(
+    /** 快路径：transferTo 可能返回 0/少传，必须用 statSize 校验，失败由调用方退回流复制 */
+    private fun tryFastCopy(
+        pfd: ParcelFileDescriptor,
+        target: File,
+        statSize: Long,
+        cancelled: () -> Boolean,
+        generation: Long,
+    ): CopyOutcome {
+        var complete = false
+        try {
+            FileInputStream(pfd.fileDescriptor).use { input ->
+                FileOutputStream(target).use { output ->
+                    val inChannel = input.channel
+                    val outChannel = output.channel
+                    var position = 0L
+                    var total = 0L
+                    var stalls = 0
+                    while (!cancelled()) {
+                        val moved = inChannel.transferTo(position, CHUNK_SIZE, outChannel)
+                        if (moved <= 0L) {
+                            if (++stalls >= MAX_STALLS) break
+                            continue
+                        }
+                        stalls = 0
+                        position += moved
+                        total += moved
+                        onCopyProgress(generation, total, statSize)
+                    }
+                    complete = !cancelled() && total == statSize
+                }
+            }
+        } catch (_: Throwable) {
+            complete = false
+        }
+        return if (complete) CopyOutcome.OK else CopyOutcome.FAILED
+    }
+
+    private fun streamCopyFromUri(
         uri: Uri,
         target: File,
         cancelled: () -> Boolean,
-        onProgress: (Long, Long) -> Unit,
+        maxBytes: Long,
+        generation: Long,
     ): CopyOutcome = try {
-        var reachedEof = false
-        val opened = contentResolver.openInputStream(uri)?.use { input ->
-            FileOutputStream(target).use { output ->
-                val buffer = ByteArray(COPY_BUFFER)
-                var total = 0L
-                while (!cancelled()) {
-                    val read = input.read(buffer)
-                    if (read < 0) {
-                        reachedEof = true
-                        break
-                    }
-                    output.write(buffer, 0, read)
-                    total += read
-                    onProgress(total, -1L)
-                }
-            }
-            true
-        } ?: false
-        val complete = opened && reachedEof && !cancelled()
-        if (!complete) target.delete()
-        if (complete) CopyOutcome.OK else CopyOutcome.FAILED
+        val input = contentResolver.openInputStream(uri) ?: return CopyOutcome.FAILED
+        input.use { streamCopy(it, target, cancelled, maxBytes, generation) }
     } catch (error: Throwable) {
         target.delete()
-        // 写满磁盘时这里才第一次知道：明确报“空间不足”，而不是笼统的“复制失败”
-        if (CacheCleaner.isNoSpace(error)) CopyOutcome.NO_SPACE else CopyOutcome.FAILED
+        outcomeFor(error)
+    }
+
+    /** 兜底复制：带上限、可取消，读到 EOF 才算完整 */
+    private fun streamCopy(
+        input: InputStream,
+        target: File,
+        cancelled: () -> Boolean,
+        maxBytes: Long,
+        generation: Long,
+    ): CopyOutcome {
+        val result = try {
+            FileOutputStream(target).use { output ->
+                StreamCopier.copy(
+                    input = input,
+                    output = output,
+                    maxBytes = maxBytes,
+                    cancelled = cancelled,
+                ) { copied -> onCopyProgress(generation, copied, -1L) }
+            }
+        } catch (_: Throwable) {
+            target.delete()
+            return CopyOutcome.FAILED
+        }
+        return when (result.outcome) {
+            StreamCopier.Outcome.OK -> CopyOutcome.OK
+            StreamCopier.Outcome.TOO_LARGE -> {
+                target.delete()
+                CopyOutcome.TOO_LARGE
+            }
+            StreamCopier.Outcome.CANCELLED -> {
+                target.delete()
+                CopyOutcome.FAILED
+            }
+            StreamCopier.Outcome.FAILED -> {
+                target.delete()
+                outcomeFor(result.error)
+            }
+        }
+    }
+
+    private fun outcomeFor(error: Throwable?): CopyOutcome = when {
+        error == null -> CopyOutcome.FAILED
+        error is SecurityException || error is FileNotFoundException -> CopyOutcome.SOURCE_UNAVAILABLE
+        CacheCleaner.isNoSpace(error) -> CopyOutcome.NO_SPACE
+        else -> CopyOutcome.FAILED
     }
 
     /**
      * 同目录复制（只在“已经交付过的文件”需要改名时使用，避免打破对方正在读的 URI）。
-     * 同样做字节数校验：transferTo 少传时判失败并删掉半成品，不留静默截断的文件。
+     * 用 copyTo 逐块复制并校验字节数，避免 transferTo 瞬时返回 0 导致改名失败。
      */
     private fun copyFile(source: File, target: File): Boolean {
         val expected = source.length()
         val copied = try {
             FileInputStream(source).use { input ->
-                FileOutputStream(target).use { output ->
-                    var position = 0L
-                    var total = 0L
-                    while (true) {
-                        val moved = input.channel.transferTo(position, CHUNK_SIZE, output.channel)
-                        if (moved <= 0L) break
-                        position += moved
-                        total += moved
-                    }
-                    total
-                }
+                FileOutputStream(target).use { output -> input.copyTo(output) }
             }
         } catch (_: Throwable) {
             -1L
@@ -595,17 +991,54 @@ class MainActivity : AppCompatActivity() {
     )
 
     private fun onSendClicked() {
-        prepareThenAct { file -> startShare(file) }
+        prepareThenAct { file, generation -> startShare(file, generation) }
     }
 
     /** 把改名后的文件交给系统分享面板；只有 startActivity 成功才算真正交付 */
-    private suspend fun startShare(file: File) {
+    private suspend fun startShare(file: File, generation: Long) {
+        if (!operations.isCurrent(generation)) return
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            setStatus(getString(R.string.status_resume_to_continue), isError = true)
+            setButtonsEnabled(copyDone)
+            return
+        }
         val finalName = file.name
         val shareUri = try {
             FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
         } catch (_: Throwable) {
             setStatus(getString(R.string.status_rename_failed), isError = true)
             setButtonsEnabled(copyDone)
+            return
+        }
+        val session = file.parentFile?.name
+        if (session == null) {
+            setStatus(getString(R.string.status_rename_failed), isError = true)
+            setButtonsEnabled(copyDone)
+            return
+        }
+
+        // 决策 A：先写交付标记，再启动分享面板。
+        // 进程在 startActivity 之后、标记写完之前被杀，文件就没有跨进程保护；
+        // 现在如果标记写不进去，直接不发分享，避免把死链交给对方 App。
+        val protected = try {
+            withContext(Dispatchers.IO) {
+                CacheStore.markDelivered(stateRoot, session, System.currentTimeMillis())
+            }
+        } catch (cancel: CancellationException) {
+            // 标记可能已经写下去了，但界面在这时被销毁：回滚后再把取消继续抛出去。
+            withContext(NonCancellable + Dispatchers.IO) {
+                CacheStore.clearDelivered(stateRoot, session)
+            }
+            throw cancel
+        }
+        if (!protected) {
+            setStatus(getString(R.string.status_cache_protect_failed), isError = true)
+            setButtonsEnabled(copyDone)
+            return
+        }
+        if (!operations.isCurrent(generation)) {
+            // 标记已经写了但还没交出去：回滚，别让旧会话无谓保温 24 小时。
+            withContext(NonCancellable + Dispatchers.IO) { CacheStore.clearDelivered(stateRoot, session) }
             return
         }
 
@@ -617,22 +1050,36 @@ class MainActivity : AppCompatActivity() {
             clipData = ClipData.newUri(contentResolver, finalName, shareUri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
+        val chooser = Intent.createChooser(sendIntent, getString(R.string.chooser_title)).apply {
+            // 排除自己：分享面板里不再出现 HelloRename，避免用户形成自循环（L3）
+            putExtra(
+                Intent.EXTRA_EXCLUDE_COMPONENTS,
+                arrayOf(ComponentName(this@MainActivity, MainActivity::class.java)),
+            )
+        }
 
-        try {
-            startActivity(Intent.createChooser(sendIntent, getString(R.string.chooser_title)))
+        val started = try {
+            startActivity(chooser)
+            true
         } catch (_: ActivityNotFoundException) {
             Toast.makeText(this, R.string.toast_no_share_app, Toast.LENGTH_LONG).show()
+            false
+        } catch (_: Throwable) {
+            setStatus(getString(R.string.status_share_failed), isError = true)
+            false
+        }
+        if (!started) {
+            withContext(NonCancellable + Dispatchers.IO) { CacheStore.clearDelivered(stateRoot, session) }
             setButtonsEnabled(copyDone)
             return
         }
+
         // 真的交出去了：登记这条路径“别人可能在读”，之后不许再 rename/删除它
         handedOutPaths.add(file.absolutePath)
-        // 同一件事还要落一份到磁盘：内存里的登记一重启就没了，而清理恰恰发生在那之后。
-        // 用 NonCancellable：万一界面正好在这时被系统销毁，标记也必须写完，
-        // 否则已交付的文件会在下次冷启动被当成“未交付”删掉，把对方的 URI 变成死链。
-        withContext(NonCancellable + Dispatchers.IO) { markDelivered(file) }
-        // Toast 提醒“选别的应用”，然后关掉主界面，防止用户回头又选本应用
-        finishWithToast(getString(R.string.toast_sent, getString(R.string.app_name)))
+        if (operations.isCurrent(generation)) {
+            // Toast 提醒“选别的应用”，然后关掉主界面，防止用户回头又选本应用
+            finishWithToast(getString(R.string.toast_sent, getString(R.string.app_name)))
+        }
     }
 
     /**
@@ -641,11 +1088,8 @@ class MainActivity : AppCompatActivity() {
      * 改名里的重复复制（大文件）和 rename 全部丢到 IO 线程，不再卡主线程；
      * 期间禁用两个按钮防连点。是否算“交付过”由 [onReady] 决定：只有真正交付成功
      * 才会把路径登记进 [handedOutPaths]，取消/失败不会。
-     *
-     * [onReady] 是挂起函数：交付成功后要顺手把“已交付”标记写到磁盘上（IO 线程），
-     * 而这一步必须赶在界面被 finish 掉之前完成，所以不能另起一个 lifecycleScope 协程。
      */
-    private fun prepareThenAct(onReady: suspend (File) -> Unit) {
+    private fun prepareThenAct(onReady: suspend (File, Long) -> Unit) {
         val uri = sourceUri
         if (uri == null) {
             setStatus(getString(R.string.status_no_file), isError = true)
@@ -671,17 +1115,32 @@ class MainActivity : AppCompatActivity() {
             sessionDir = sessionDir,
             handedOut = handedOutPaths.toSet(),
         )
-        val session = copySession
+        val generation = operations.current()
         setButtonsEnabled(false)
-        lifecycleScope.launch {
-            val result = withContext(Dispatchers.IO) { prepareFinalFile(snapshot) }
-            preparingFile = false
+        prepareJob = lifecycleScope.launch {
+            val result = try {
+                withContext(Dispatchers.IO) {
+                    prepareFinalFile(snapshot) { !operations.isCurrent(generation) }
+                }
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (_: Throwable) {
+                PrepareResult.RenameFailed
+            } finally {
+                if (operations.isCurrent(generation)) preparingFile = false
+            }
             // 改名期间又分享了新文件：这次结果作废，界面状态交给新会话
-            if (session != copySession) return@launch
+            if (!operations.isCurrent(generation)) return@launch
             when (result) {
                 is PrepareResult.Ready -> {
                     currentFile = result.file
-                    onReady(result.file)
+                    if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                        // 用户已经按 Home：不要从后台启动分享面板/SAF 选择器（L7）。
+                        setStatus(getString(R.string.status_resume_to_continue), isError = true)
+                        setButtonsEnabled(copyDone)
+                        return@launch
+                    }
+                    onReady(result.file, generation)
                 }
                 PrepareResult.NeedCopy -> {
                     setStatus(getString(R.string.status_copying), isError = false)
@@ -699,7 +1158,11 @@ class MainActivity : AppCompatActivity() {
      * 把输入框里的改名落到缓存文件上（同目录 rename；已交付过的旧名改成复制）。
      * 只在 IO 线程调用，不碰任何 View，结果由调用方 [prepareThenAct] 落到界面上。
      */
-    private fun prepareFinalFile(snapshot: RenameSnapshot): PrepareResult {
+    private fun prepareFinalFile(
+        snapshot: RenameSnapshot,
+        cancelled: () -> Boolean,
+    ): PrepareResult {
+        if (cancelled()) return PrepareResult.NeedCopy
         val file = snapshot.file
         if (!file.exists()) return PrepareResult.NeedCopy
 
@@ -708,15 +1171,22 @@ class MainActivity : AppCompatActivity() {
         val target = File(snapshot.sessionDir ?: file.parentFile, finalName)
 
         if (target.absolutePath != file.absolutePath) {
+            if (target.exists()) {
+                // 目标名字已经被交付出去：绝不能删掉它，否则对方的 URI 会变死链。
+                if (snapshot.handedOut.contains(target.absolutePath)) {
+                    return PrepareResult.RenameFailed
+                }
+                if (!target.delete()) return PrepareResult.RenameFailed
+            }
             val succeeded = if (snapshot.handedOut.contains(file.absolutePath)) {
                 // 旧名字已经交给别人了，动它会让对方正在读的 URI 失效，所以另复制一份
                 copyFile(file, target)
             } else {
-                if (target.exists()) target.delete()
                 file.renameTo(target)
             }
             if (!succeeded) return PrepareResult.RenameFailed
         }
+        if (cancelled()) return PrepareResult.NeedCopy
         return PrepareResult.Ready(target)
     }
 
@@ -754,16 +1224,22 @@ class MainActivity : AppCompatActivity() {
     // ---------------------------------------------------------------- 保存到下载
 
     private fun onSaveClicked() {
-        prepareThenAct { file ->
+        prepareThenAct { file, generation ->
             val finalName = file.name
             val mime = resolveMime(FileNameUtils.split(finalName).ext)
             binding.saveButton.isEnabled = false
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                saveViaMediaStore(file, finalName, mime)
+                saveViaMediaStore(file, finalName, mime, generation)
             } else {
-                saveViaSaf(file, finalName, mime)
+                saveViaSaf(file, finalName, mime, generation)
             }
         }
+    }
+
+    private sealed interface SaveResult {
+        data class Success(val uri: Uri) : SaveResult
+        data object Cancelled : SaveResult
+        data class Failed(val error: Throwable?) : SaveResult
     }
 
     /**
@@ -771,38 +1247,89 @@ class MainActivity : AppCompatActivity() {
      * IS_PENDING 期间条目对其他应用不可见，写完再转正；重名由系统自动编号，不会覆盖已有文件。
      */
     @RequiresApi(Build.VERSION_CODES.Q)
-    private fun saveViaMediaStore(source: File, displayName: String, mime: String) {
+    private fun saveViaMediaStore(
+        source: File,
+        displayName: String,
+        mime: String,
+        generation: Long,
+    ) {
+        if (!operations.isCurrent(generation)) return
+        wasSaving = true
         setStatus(getString(R.string.status_saving), isError = false)
         binding.progress.isIndeterminate = true
         binding.progress.progress = 0
         binding.progress.visibility = View.VISIBLE
-        lifecycleScope.launch {
-            val saved = withContext(Dispatchers.IO) {
-                insertIntoDownloads(source, displayName, mime)?.also {
-                    // 真的写成功才算交付过；标记落盘要在同一个 IO 块里做，别再多切一次线程
-                    markDelivered(source)
+        setButtonsEnabled(false)
+
+        saveJob = lifecycleScope.launch {
+            var out: Uri? = null
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    insertIntoDownloads(source, displayName, mime, { !operations.isCurrent(generation) }) { uri ->
+                        out = uri
+                        pendingMediaUri = uri
+                    }
                 }
-            }
-            binding.progress.visibility = View.GONE
-            if (saved != null) {
-                // 真的写成功才算交付过
-                handedOutPaths.add(source.absolutePath)
-                finishWithToast(getString(R.string.toast_saved, ellipsizeForToast(displayName)))
-            } else {
-                setStatus(getString(R.string.status_save_failed), isError = true)
-                Toast.makeText(
-                    applicationContext,
-                    R.string.toast_save_failed,
-                    Toast.LENGTH_LONG,
-                ).show()
-                setButtonsEnabled(copyDone)
+                if (!operations.isCurrent(generation)) return@launch
+                wasSaving = false
+                binding.progress.visibility = View.GONE
+                when (result) {
+                    is SaveResult.Success -> {
+                        withContext(Dispatchers.IO) { markDelivered(source) }
+                        handedOutPaths.add(source.absolutePath)
+                        finishWithToast(
+                            getString(R.string.toast_saved, FileNameUtils.ellipsizeForToast(displayName)),
+                        )
+                    }
+                    SaveResult.Cancelled -> {
+                        setStatus(getString(R.string.status_save_canceled), isError = false)
+                        setButtonsEnabled(copyDone)
+                    }
+                    is SaveResult.Failed -> {
+                        setStatus(getString(R.string.status_save_failed), isError = true)
+                        Toast.makeText(
+                            applicationContext,
+                            R.string.toast_save_failed,
+                            Toast.LENGTH_LONG,
+                        ).show()
+                        setButtonsEnabled(copyDone)
+                    }
+                }
+            } catch (cancel: CancellationException) {
+                withContext(NonCancellable + Dispatchers.IO) { out?.let { deleteMedia(it) } }
+                throw cancel
+            } catch (_: Throwable) {
+                withContext(NonCancellable + Dispatchers.IO) { out?.let { deleteMedia(it) } }
+                if (operations.isCurrent(generation)) {
+                    wasSaving = false
+                    binding.progress.visibility = View.GONE
+                    setStatus(getString(R.string.status_save_failed), isError = true)
+                    Toast.makeText(
+                        applicationContext,
+                        R.string.toast_save_failed,
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    setButtonsEnabled(copyDone)
+                }
+            } finally {
+                pendingMediaUri = null
             }
         }
     }
 
-    /** 只在 IO 线程调用；失败返回 null 并顺手清掉半成品条目 */
+    /**
+     * 只在 IO 线程调用。任何一步失败都删掉 pending 条目；`update(IS_PENDING=0)` 返回 <= 0
+     * 也算失败，否则会留下 Downloads 里看不见、界面却提示“已保存”的孤儿文件。
+     */
     @RequiresApi(Build.VERSION_CODES.Q)
-    private fun insertIntoDownloads(source: File, displayName: String, mime: String): Uri? {
+    private fun insertIntoDownloads(
+        source: File,
+        displayName: String,
+        mime: String,
+        cancelled: () -> Boolean,
+        onPending: (Uri) -> Unit,
+    ): SaveResult {
+        if (cancelled()) return SaveResult.Cancelled
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
             put(MediaStore.MediaColumns.MIME_TYPE, mime)
@@ -810,26 +1337,54 @@ class MainActivity : AppCompatActivity() {
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
         val resolver = contentResolver
-        val out = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return null
+        val out = try {
+            resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+        } catch (error: Throwable) {
+            return SaveResult.Failed(error)
+        } ?: return SaveResult.Failed(null)
+        onPending(out)
+
+        var success = false
         return try {
-            val stream = resolver.openOutputStream(out) ?: error("openOutputStream returned null")
+            val stream = resolver.openOutputStream(out)
+                ?: throw IOException("openOutputStream returned null")
             stream.use { output ->
-                FileInputStream(source).use { input -> input.copyTo(output) }
+                FileInputStream(source).use { input ->
+                    val copied = StreamCopier.copy(input, output, cancelled = cancelled)
+                    if (copied.outcome == StreamCopier.Outcome.CANCELLED) return SaveResult.Cancelled
+                    if (copied.outcome != StreamCopier.Outcome.OK) {
+                        throw copied.error ?: IOException("copy failed: ${copied.outcome}")
+                    }
+                }
             }
-            resolver.update(
+            if (cancelled()) return SaveResult.Cancelled
+            val updated = resolver.update(
                 out,
                 ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) },
                 null,
                 null,
             )
-            out
-        } catch (_: Throwable) {
-            try {
-                resolver.delete(out, null, null)
-            } catch (_: Throwable) {
-                // 清理失败就留给系统回收
+            if (updated <= 0) throw IOException("IS_PENDING update returned $updated")
+            success = true
+            SaveResult.Success(out)
+        } catch (error: Throwable) {
+            if (cancelled()) SaveResult.Cancelled else SaveResult.Failed(error)
+        } finally {
+            if (!success) {
+                try {
+                    resolver.delete(out, null, null)
+                } catch (_: Throwable) {
+                    // 清理失败就留给系统回收
+                }
             }
-            null
+        }
+    }
+
+    private fun deleteMedia(uri: Uri) {
+        try {
+            contentResolver.delete(uri, null, null)
+        } catch (_: Throwable) {
+            // ignore
         }
     }
 
@@ -837,9 +1392,23 @@ class MainActivity : AppCompatActivity() {
      * Android 7–9：SAF 选择器（这个区间零权限的唯一稳妥做法；直接写文件要
      * WRITE_EXTERNAL_STORAGE，会破坏本项目的零权限承诺，也会挂掉 QA 体检的权限门禁）。
      */
-    private fun saveViaSaf(source: File, displayName: String, mime: String) {
+    private fun saveViaSaf(
+        source: File,
+        displayName: String,
+        mime: String,
+        generation: Long,
+    ) {
+        if (savePendingFile != null) return
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            setStatus(getString(R.string.status_resume_to_continue), isError = true)
+            setButtonsEnabled(copyDone)
+            return
+        }
         savePendingFile = source
+        saveGeneration = generation
+        wasSaving = true
         setStatus(getString(R.string.status_saving), isError = false)
+        setButtonsEnabled(false)
         val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = mime
@@ -853,6 +1422,7 @@ class MainActivity : AppCompatActivity() {
             pickSaveLocation.launch(intent)
         } catch (_: Throwable) {
             savePendingFile = null
+            wasSaving = false
             setButtonsEnabled(copyDone)
             setStatus(getString(R.string.status_save_failed), isError = true)
             Toast.makeText(applicationContext, R.string.toast_save_failed, Toast.LENGTH_LONG).show()
@@ -868,20 +1438,97 @@ class MainActivity : AppCompatActivity() {
         "primary:${Environment.DIRECTORY_DOWNLOADS}",
     )
 
+    private class WriteResult(
+        val ok: Boolean,
+        val bytes: Long,
+        val incomplete: Boolean,
+    )
+
     /**
      * 把缓存文件流式写到 SAF 返回的 URI。
-     * 先试 "wt"（截断写，不残留旧内容）；个别第三方 DocumentsProvider 不支持该模式，
-     * 会直接抛异常，此时退回 "w"（同样会截断后重写，不会把两份内容拼在一起）。
+     *
+     * 先试 "wt"（截断写，不残留旧内容）；只有**一个字节都没写进去**时才允许回退 "w"。
+     * 旧实现无条件回退：如果 "wt" 已经写了一半才失败，而目标 Provider 对 "w" 不做截断，
+     * 就会留下“半截旧内容 + 完整新内容”的混合文件。
      */
-    private fun writeToUri(source: File, dest: Uri): Boolean =
-        writeToUriWithMode(source, dest, "wt") || writeToUriWithMode(source, dest, "w")
+    private fun writeToUri(
+        source: File,
+        dest: Uri,
+        cancelled: () -> Boolean,
+    ): WriteResult {
+        val first = writeToUriWithMode(source, dest, "wt", cancelled)
+        if (first.ok) return first
+        if (first.bytes > 0L || cancelled()) {
+            cleanupDocument(dest)
+            return first
+        }
+        val second = writeToUriWithMode(source, dest, "w", cancelled)
+        if (second.ok) return second
+        // 失败后尽量删除/截断目标；删不掉也要明确告诉用户可能不完整。
+        cleanupDocument(dest)
+        return WriteResult(
+            ok = false,
+            bytes = second.bytes,
+            incomplete = second.bytes > 0L || first.bytes > 0L,
+        )
+    }
 
-    private fun writeToUriWithMode(source: File, dest: Uri, mode: String): Boolean = try {
-        contentResolver.openOutputStream(dest, mode)?.use { output ->
-            FileInputStream(source).use { input -> input.copyTo(output) }
-        } != null
-    } catch (_: Throwable) {
-        false
+    private fun writeToUriWithMode(
+        source: File,
+        dest: Uri,
+        mode: String,
+        cancelled: () -> Boolean,
+    ): WriteResult {
+        var written = 0L
+        return try {
+            val output = contentResolver.openOutputStream(dest, mode)
+                ?: return WriteResult(false, 0L, false)
+            output.use { out ->
+                FileInputStream(source).use { input ->
+                    val buffer = ByteArray(COPY_BUFFER)
+                    var zeroReads = 0
+                    while (true) {
+                        if (cancelled()) return WriteResult(false, written, written > 0L)
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        if (read == 0) {
+                            zeroReads++
+                            if (zeroReads > MAX_ZERO_READS) {
+                                return WriteResult(false, written, written > 0L)
+                            }
+                            Thread.yield()
+                            continue
+                        }
+                        zeroReads = 0
+                        out.write(buffer, 0, read)
+                        written += read
+                    }
+                }
+            }
+            val expected = source.length()
+            if (cancelled() || (expected >= 0L && written != expected)) {
+                WriteResult(false, written, incomplete = written > 0L)
+            } else {
+                WriteResult(true, written, incomplete = false)
+            }
+        } catch (_: Throwable) {
+            WriteResult(false, written, incomplete = written > 0L)
+        }
+    }
+
+    private fun cleanupDocument(uri: Uri) {
+        try {
+            if (DocumentsContract.deleteDocument(contentResolver, uri)) return
+        } catch (_: Throwable) {
+            // 有些 DocumentsProvider 不支持 deleteDocument：再尝试以 "wt" 重开并关闭来截断
+        }
+        try {
+            contentResolver.openOutputStream(uri, "wt")?.use {
+                // 关闭即完成截断
+            }
+        } catch (_: Throwable) {
+            // 清理不了就只能让调用方明确报“可能不完整”
+        }
     }
 
     // ---------------------------------------------------------------- 扩展名锁
@@ -953,20 +1600,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Android 12+ 的 Toast 最多显示两行，超出的部分会被系统直接截掉，
-     * 所以放进 Toast 的文件名先掐短：保留首尾（尾部能保住扩展名），中间省略。
-     */
-    private fun ellipsizeForToast(name: String): String {
-        if (name.length <= TOAST_NAME_MAX_CHARS) return name
-        val head = (TOAST_NAME_MAX_CHARS - 1) / 2
-        val tail = TOAST_NAME_MAX_CHARS - 1 - head
-        return name.take(head) + "…" + name.takeLast(tail)
-    }
-
     private fun showEmptyState() {
-        copyJob?.cancel()
-        copyJob = null
+        operations.begin()
+        cancelOperations()
         sourceUri = null
         sourceMime = null
         originalName = ""
@@ -978,6 +1614,12 @@ class MainActivity : AppCompatActivity() {
         copyDone = false
         handedOutPaths.clear()
         lockedExt = ""
+        savePendingFile = null
+        wasSaving = false
+        loadingMeta = false
+        preparingFile = false
+        lastPercent.set(-1)
+        lastReportedBytes.set(0L)
 
         binding.oldNameText.text = getString(R.string.old_name_none)
         setInput("")
@@ -998,9 +1640,6 @@ class MainActivity : AppCompatActivity() {
     /**
      * 触发一次缓存清理。**清理永远在 IO 线程跑**：删除是真实磁盘操作，旧实现放在 onCreate 里
      * 同步做，攒了几个 >1 小时的大文件就会卡住冷启动（甚至 ANR）。
-     *
-     * 顺序上也不再需要“先清理、再建当前会话目录”来保命：当前会话在 [startCopy] 里就登记进
-     * [CacheState] 了，清理带排除集，删不到它。
      */
     private fun startCleanup(force: Boolean) {
         lifecycleScope.launch {
@@ -1053,6 +1692,60 @@ class MainActivity : AppCompatActivity() {
         sessionDir = null
     }
 
+    // ---------------------------------------------------------------- 后台宽限 / 取消
+
+    /**
+     * 用户按 Home 后不再立即释放会话：给 30 分钟宽限，期间返回还能继续用。
+     * 30 分钟后如果复制/保存都不在跑，才撤掉活会话登记，让 10 分钟未交付 TTL 生效。
+     */
+    private fun scheduleBackgroundGrace() {
+        backgroundJob?.cancel()
+        backgroundJob = lifecycleScope.launch {
+            while (isActive) {
+                delay(BACKGROUND_GRACE_MS)
+                val busy = copyJob?.isActive == true ||
+                    prepareJob?.isActive == true ||
+                    saveJob?.isActive == true ||
+                    preparingFile ||
+                    loadingMeta ||
+                    savePendingFile != null
+                if (busy) continue
+                CacheState.unregister(sessionDir)
+                break
+            }
+        }
+    }
+
+    /** 从后台回来时缓存可能已被清掉：自动重试复制一次，不让界面停在空文件上 */
+    private fun maybeRetryCopy() {
+        if (isFinishing || loadingMeta) return
+        if (savePendingFile != null) return
+        if (copyJob?.isActive == true || prepareJob?.isActive == true || saveJob?.isActive == true) return
+        val uri = sourceUri ?: return
+        val file = currentFile
+        if (!copyDone || file == null || !file.isFile) {
+            setStatus(getString(R.string.status_copying), isError = false)
+            startCopy(uri)
+        }
+    }
+
+    /** 统一取消所有异步操作，并清理它们可能留下的 MediaStore/SAF 半成品 */
+    private fun cancelOperations() {
+        copyJob?.cancel()
+        copyJob = null
+        prepareJob?.cancel()
+        prepareJob = null
+        saveJob?.cancel()
+        saveJob = null
+        preparingFile = false
+        wasSaving = false
+        val media = pendingMediaUri
+        pendingMediaUri = null
+        if (media != null) {
+            cleanupScope.launch { deleteMedia(media) }
+        }
+    }
+
     private companion object {
         const val TAG = "hellorename"
         const val INCOMING_NAME = "_incoming"
@@ -1060,8 +1753,26 @@ class MainActivity : AppCompatActivity() {
         const val CHUNK_SIZE = 1048576L          // 1 MiB
         const val COPY_BUFFER = 65536
         const val MAX_STALLS = 3
+        const val MAX_ZERO_READS = 100
         const val PROGRESS_BYTE_STEP = 4194304L  // 4 MiB
-        const val TOAST_NAME_MAX_CHARS = 32      // Android 12+ Toast 只有两行，文件名先掐短
+        const val BACKGROUND_GRACE_MS = 30 * 60 * 1000L
         const val EXTERNAL_STORAGE_AUTHORITY = "com.android.externalstorage.documents"
+
+        const val KEY_HAS_SOURCE = "has_source"
+        const val KEY_SOURCE_URI = "source_uri"
+        const val KEY_SOURCE_MIME = "source_mime"
+        const val KEY_ORIGINAL_NAME = "original_name"
+        const val KEY_ORIGINAL_BASE = "original_base"
+        const val KEY_ORIGINAL_EXT = "original_ext"
+        const val KEY_SOURCE_SIZE = "source_size"
+        const val KEY_SESSION_DIR = "session_dir"
+        const val KEY_CURRENT_FILE = "current_file"
+        const val KEY_COPY_DONE = "copy_done"
+        const val KEY_INPUT = "input"
+        const val KEY_EXT_LOCKED = "ext_locked"
+        const val KEY_LOCKED_EXT = "locked_ext"
+        const val KEY_HANDED_OUT = "handed_out"
+        const val KEY_SAVE_PENDING = "save_pending"
+        const val KEY_WAS_SAVING = "was_saving"
     }
 }

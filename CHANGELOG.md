@@ -2,6 +2,46 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)；每个 `v*` tag 会由 GitHub Actions 自动构建并发布 APK。
 
+## [1.3.2] - 2026-10-18
+
+底层逻辑集中修复：生命周期/状态恢复、保存竞态、缓存交付标记、主线程 Provider 查询、MediaStore/SAF 异常路径、文件名与 Intent 健壮性。全部修复都有对应的 JVM 单测或 API 34 模拟器 instrumentation 覆盖。
+
+### Fixed（生命周期与状态）
+- **H1 深浅色/字体/语言切换后丢状态**：Activity 重建时通过 `onSaveInstanceState` 保存并恢复源 URI、MIME、原文件名、缓存会话/当前文件、复制状态、输入框内容、扩展名锁定、已交付路径和 SAF 待保存文件。复制未完成会自动重试；已完成的文件不会重新复制。
+- **H11 SAF 待保存文件在重建后丢失**：`savePendingFile` 进入保存状态，重建后仍能接住 `ACTION_CREATE_DOCUMENT` 的回调，不再把保存静默变成“已取消”。
+- **L6/L7 MAIN/纯文本 Intent 与后台启动**：已有文件时收到 `ACTION_MAIN` 或纯文本分享不再清空界面；prepare 完成时如果界面已经 `onStop`，不会从后台启动分享面板/SAF，而是提示回到应用重试。
+- **H8 `showEmptyState` 不失效旧任务**：重置/新入口统一递增操作代际并取消复制、prepare、MediaStore 保存和 SAF 写入；旧任务回到主线程后不再改 UI、不再 finish。
+
+### Fixed（保存竞态与错误处理）
+- **H2 保存中收到新分享会关掉新界面**：MediaStore/SAF 保存都捕获自己的操作代际，新分享后旧任务只清理自己的半成品，不再 `finish` 新界面、不再弹旧 Toast。
+- **H5 MediaStore 异常/孤儿条目**：`insert`、`openOutputStream`、写入、`update(IS_PENDING=0)` 全部捕获；`update` 返回 `<= 0` 视为失败，删除 pending 条目；整个保存流程不会因 Provider 异常崩溃。
+- **H6 SAF `wt` 部分写入后回退 `w`**：只有**一个字节都没写进去**时才回退 `"w"`；已经写了部分数据时不再盲目重写，失败后尝试 `deleteDocument`/`"wt"` 截断，并明确提示目标文件可能不完整；成功时校验写入字节数。
+
+### Fixed（缓存与交付标记）
+- **H7 交付标记在分享之后写**：改为**先写标记再启动分享面板**；`startActivity` 失败会回滚标记；标记写不进去时不启动分享，避免把死链交给目标 App。
+- **H3 清理误删新会话标记**：`cleanup` 只 prune 本次真正列到过、且确实已经删除的会话标记；清理开始后新建的会话标记不会被误删。`listFiles()` 返回 null 时直接跳过 prune，不再把“读不出来”当成空目录。清理加进程内互斥，避免两个强制清理并发 prune。
+- **H12 会话目录撞名**：会话名改为“时间戳 + 会话号 + UUID”，时钟回拨/进程重启/同毫秒都不会复用旧目录；目录已存在时重新生成，不再复用。
+- **H9 后台未交付缓存永远不清理**：`onStop` 后给 30 分钟宽限，期间返回仍受保护；30 分钟后且没有复制/保存在跑时撤掉活会话登记，让 10 分钟未交付 TTL 生效。返回时如果缓存文件已被清理，会自动重试复制。
+- **L9 移除无用的持久化 URI 授权**：不再对每次 SAF 选择的文件调用 `takePersistableUriPermission`，避免长期累积授权。
+
+### Fixed（复制与空间）
+- **H4 主线程查询 ContentProvider**：`getType`/`query` 移到 IO 线程，界面先显示“正在读取文件”；`mkdirs` 也移出主线程。慢/恶意 Provider 不会再直接 ANR。
+- **H10 32MB 固定预留拒绝小文件**：预留量改为 `min(32MB, 剩余空间/4)`，只剩 20MB 的设备也能复制 1KB 文件。
+- **L4 未知大小流无上限**：未知大小（或报 0）的流最多复制 `min(2GB, 可写空间 - 动态预留)`；超限时删除半成品并明确提示，不会无限填满磁盘。
+- **复制路径健壮性**：`statSize == 0` 不再走“空文件成功”快路径；`statSize < 0` 复用已经打开的 PFD；读写 `0` 字节时让出而不是忙等；同目录 `copyFile` 改用 `copyTo` 并校验字节数，避免 `transferTo` 瞬时 0 导致改名失败。
+
+### Fixed（文件名 / Intent / 其它）
+- **L1 文件名劈开 emoji 代理对**：先按 code point 再按 UTF-8 字节截断，ASCII 前缀 + emoji 不再产生 `?`；Toast 文件名也按 code point 省略。
+- **L2 控制字符 / 双向控制符**：C0/C1 控制字符替换为 `_`，bidi 控制符（U+061C、U+200E/200F、U+202A–202E、U+2066–2069）直接移除，避免文件名伪装。
+- **L5 `EXTRA_STREAM` 类型不安全**：支持 `Uri`、`ArrayList<Uri>`、`Parcelable[]`，其他 Parcelable/坏数据按“没有文件”处理，不再 `ClassCastException`/`BadParcelableException` 崩溃；`clipData` 解析也做了兜底。
+- **L3 分享面板包含自己**：chooser 通过 `EXTRA_EXCLUDE_COMPONENTS` 排除 HelloRename，底部警示语保留作为双保险。
+- **L8 空间不足文案识别**：补充 `not enough space`、`disk full`、`quota`、`insufficient storage`、`storage full`。
+- **时钟回拨导致清理永久节流**：`CacheState.shouldCleanup` 检测到 `now < lastCleanupAt` 时重置基准并放行一次。
+
+### Tests
+- JVM 单测增加到 **71 条**：新增 `StreamCopierTest`、`OperationRegistryTest`，并补充 `CacheCleanerTest`（prune 竞态、`listFiles` 为 null、原子标记、UUID、动态预留、未知流上限、时钟回拨、`isNoSpace`）与 `FileNameUtilsTest`（代理对、控制符、bidi、Toast 省略）。
+- API 34 模拟器新增 `MainActivityFlowTest`：分享复制、重建后恢复输入/旧文件名、`ACTION_MAIN` 不清空、异常 `EXTRA_STREAM` 不崩溃、`Parcelable[]` 形式仍可用；与 `ThemeUiTest` 一起作为 QA/Release 的模拟器门禁。
+
 ## [1.3.1] - 2026-10-18
 
 修复 v1.3.0 的重复标题，并把云端模拟器 UI 验证设为发布前的硬门槛。

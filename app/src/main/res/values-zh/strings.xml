@@ -5,6 +5,7 @@
 
     <string name="label_original_name">原文件名</string>
     <string name="old_name_none">—（还没有收到文件）—</string>
+    <string name="old_name_loading">—（正在读取文件…）—</string>
     <string name="fallback_name">file</string>
     <string name="hint_new_name">新文件名</string>
     <string name="action_send">发送</string>
@@ -24,10 +25,17 @@
     <string name="status_ready">复制完成，可以改名后发送了。</string>
     <string name="status_copy_failed">复制失败，点“发送”可重试。</string>
     <string name="status_storage_low">存储空间不足，无法把文件复制进缓存；清理出空间后点“发送”重试。</string>
+    <string name="status_too_large">文件过大，无法复制进缓存。</string>
+    <string name="status_source_unavailable">无法再读取源文件（授权可能已过期），请重新分享。</string>
     <string name="status_rename_failed">重命名失败，文件名可能太长，请改短一些。</string>
+    <string name="status_share_failed">无法打开分享面板，请重试。</string>
+    <string name="status_resume_to_continue">请回到应用后重新点“发送”或“保存到下载”。</string>
     <string name="status_saving">正在保存到下载…</string>
     <string name="status_save_failed">保存失败。</string>
     <string name="status_save_canceled">已取消保存。</string>
+    <string name="status_save_interrupted">上次保存被中断，请重新点“保存到下载”。</string>
+    <string name="status_save_incomplete">保存失败，目标文件可能不完整，请检查下载目录。</string>
+    <string name="status_cache_protect_failed">无法建立缓存保护（存储空间可能已满），请清理空间后重试。</string>
     <plurals name="status_multi">
         <item quantity="other">收到 %1$d 个文件，本版本只处理第 1 个。</item>
     </plurals>

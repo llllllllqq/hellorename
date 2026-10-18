@@ -32,8 +32,8 @@ val hasReleaseSigning = sigStoreFile != null && sigStorePassword != null &&
 
 // 版本号 / applicationId 可由 CI 覆盖：
 //   -PversionName=1.2.3 -PversionCode=42 [-PapplicationIdSuffix=.debug]
-val appVersionName = (project.findProperty("versionName") as String?)?.takeIf { it.isNotBlank() } ?: "1.0.1"
-val appVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 2
+val appVersionName = (project.findProperty("versionName") as String?)?.takeIf { it.isNotBlank() } ?: "1.3.2"
+val appVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 11
 val appIdSuffix = (project.findProperty("applicationIdSuffix") as String?)?.takeIf { it.isNotBlank() } ?: ""
 
 android {

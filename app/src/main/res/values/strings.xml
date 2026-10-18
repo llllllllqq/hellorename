@@ -5,6 +5,7 @@
 
     <string name="label_original_name">Original file name</string>
     <string name="old_name_none">— no file received yet —</string>
+    <string name="old_name_loading">— reading file… —</string>
     <string name="fallback_name">file</string>
     <string name="hint_new_name">New file name</string>
     <string name="action_send">Send</string>
@@ -24,10 +25,17 @@
     <string name="status_ready">Copy finished. Rename it and hit Send.</string>
     <string name="status_copy_failed">Copy failed. Tap Send to retry.</string>
     <string name="status_storage_low">Not enough free space to copy the file. Free up space, then tap Send to retry.</string>
+    <string name="status_too_large">This file is too large to copy into the cache.</string>
+    <string name="status_source_unavailable">The source file can no longer be read (its permission may have expired). Share it again.</string>
     <string name="status_rename_failed">Rename failed. The file name may be too long — try a shorter one.</string>
+    <string name="status_share_failed">Could not open the share sheet. Please try again.</string>
+    <string name="status_resume_to_continue">Return to the app and tap Send or Save again.</string>
     <string name="status_saving">Saving to Downloads…</string>
     <string name="status_save_failed">Save failed.</string>
     <string name="status_save_canceled">Save canceled.</string>
+    <string name="status_save_interrupted">The last save was interrupted. Tap “Save to Downloads” to try again.</string>
+    <string name="status_save_incomplete">Save failed, and the target file may be incomplete. Please check Downloads.</string>
+    <string name="status_cache_protect_failed">Could not protect the cache file (storage may be full). Free up space and try again.</string>
     <plurals name="status_multi">
         <item quantity="one">%1$d file received. This version only handles the first one.</item>
         <item quantity="other">%1$d files received. This version only handles the first one.</item>

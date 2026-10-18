@@ -1,6 +1,8 @@
 package moe.hellorename
 
 import java.io.File
+import java.io.FileOutputStream
+import java.util.UUID
 
 /**
  * 缓存清理的磁盘层：只认 [java.io.File]，不碰任何 Android API（所以能用普通 JUnit 直接测，
@@ -22,6 +24,9 @@ object CacheStore {
     /** 单次扫描的条目上限：异常目录结构不该把清理拖成无底洞 */
     private const val MAX_SCAN_ENTRIES = 4096
 
+    /** 原子写标记留下的临时文件最多保留 1 小时 */
+    private const val TEMP_MARKER_TTL_MS = 60 * 60 * 1000L
+
     /** 一次清理的结果，用于日志排障（旧实现把一切吞掉，线上出问题无从下手） */
     data class Report(
         val deleted: Int,
@@ -32,14 +37,28 @@ object CacheStore {
     )
 
     /**
-     * 会话名字：毫秒时间戳 + 会话号。
+     * 会话名字：毫秒时间戳 + 会话号 + 随机后缀。
+     *
      * 只用时间戳时，同一毫秒内的两次复制会命中同一个目录（`mkdirs` 因目录已存在而“成功”），
      * 两次会话共用 `_incoming<ext>`，后一次会覆盖前一次（可能正被对方 App 读）的文件。
+     * 又因为进程重启后会话号会从 0 重新开始，系统时钟回拨时仅靠“时间戳 + 会话号”仍可能撞上
+     * 旧目录，所以再加一段 UUID：撞名概率可以忽略。
      */
-    fun newSessionName(now: Long, session: Int): String = "$now-$session"
+    fun newSessionName(
+        now: Long,
+        session: Int,
+        token: String = UUID.randomUUID().toString(),
+    ): String = "$now-$session-$token"
 
     /** shared/ 下的条目：正常是会话目录；老版本遗留的散落文件也算，一并按过期规则处理 */
-    fun sessionEntries(sharedRoot: File): List<File> = sharedRoot.listFiles().orEmpty().toList()
+    fun sessionEntries(sharedRoot: File): List<File> =
+        sessionEntriesOrNull(sharedRoot).orEmpty()
+
+    /**
+     * 与 [sessionEntries] 相同，但保留“读不出来”和“目录为空”的区别。
+     * `listFiles()` 返回 null 时绝不能当成空目录——那会把所有交付标记都 prune 掉。
+     */
+    fun sessionEntriesOrNull(sharedRoot: File): List<File>? = sharedRoot.listFiles()?.toList()
 
     /** 扫描 shared/，给出每个条目的画像（不删任何东西，方便单测直接断言规则） */
     fun snapshot(
@@ -53,21 +72,29 @@ object CacheStore {
      *
      * [livePaths] 由调用方在开始前从 [CacheState] 取快照：清理期间新注册的会话一定很新，
      * 时间判断本身就会把它留下，所以这份快照够用。
+     *
+     * 整个方法加锁：`force=true` 的清理不受节流限制，两个强制清理并发时不能同时 prune。
      */
+    @Synchronized
     fun cleanup(
         sharedRoot: File,
         stateRoot: File,
         livePaths: Set<String>,
         now: Long,
     ): Report {
+        // 读不到目录内容（I/O 错误、目录被替换成文件）时直接放弃本次清理：
+        // 把 null 当成空目录会清空所有交付标记，破坏对方 App 正在使用的 URI。
+        val entries = sessionEntriesOrNull(sharedRoot) ?: return Report(0, 0L, 0, 0, 0)
         var deleted = 0
         var freed = 0L
         var keptLive = 0
         var keptFresh = 0
         var failed = 0
+        val seen = mutableSetOf<String>()
         val remaining = mutableSetOf<String>()
 
-        for (entry in sessionEntries(sharedRoot)) {
+        for (entry in entries) {
+            seen.add(entry.name)
             val session = describe(entry, stateRoot, livePaths)
             if (!CacheCleaner.shouldDelete(session, now)) {
                 if (session.live) keptLive++ else keptFresh++
@@ -85,7 +112,9 @@ object CacheStore {
             }
         }
 
-        pruneStateMarkers(stateRoot, remaining)
+        // 只处理“本次真的列到过、且确实已经不在了”的标记：
+        // 清理开始后才新建的会话不会被列到，它的标记绝不能被误删。
+        pruneStateMarkers(stateRoot, seen, remaining, now)
         return Report(deleted, freed, keptLive, keptFresh, failed)
     }
 
@@ -127,16 +156,47 @@ object CacheStore {
      *
      * 这是**跨进程**的保护：内存里的 handedOutPaths 一重启就没了，而这份标记能活到下一次冷启动
      * 的清理，保证交出去的 URI 不会指向一个已经被删掉的文件。
+     *
+     * 写入方式：临时文件 → `fsync` → 原子 rename。旧实现直接 `writeText`，进程在写一半时被杀
+     * 会留下空文件/半个时间戳；调用方也无法区分“写成功”和“写失败”。
      */
-    fun markDelivered(stateRoot: File, session: String, now: Long): Boolean = try {
-        if (!stateRoot.isDirectory && !stateRoot.mkdirs()) {
+    fun markDelivered(stateRoot: File, session: String, now: Long): Boolean {
+        if (!isSafeSessionName(session)) return false
+        val temp = File(stateRoot, ".$session.${UUID.randomUUID()}.tmp")
+        return try {
+            if (!stateRoot.isDirectory && !stateRoot.mkdirs()) {
+                false
+            } else {
+                FileOutputStream(temp).use { output ->
+                    output.write(now.toString().toByteArray(Charsets.UTF_8))
+                    output.flush()
+                    // FileDescriptor.sync() 保证 rename 之前数据已经落到磁盘；
+                    // 这样进程被杀也不会留下一个内容为空、却被当成“已交付”的标记。
+                    output.fd.sync()
+                }
+                val marker = File(stateRoot, session)
+                if (temp.renameTo(marker)) {
+                    true
+                } else {
+                    temp.delete()
+                    false
+                }
+            }
+        } catch (_: Throwable) {
+            temp.delete()
             false
-        } else {
-            File(stateRoot, session).writeText(now.toString())
-            true
         }
-    } catch (_: Throwable) {
-        false
+    }
+
+    /** 撤销交付标记（分享启动失败时回滚，避免“没交出去却保温 24 小时”） */
+    fun clearDelivered(stateRoot: File, session: String): Boolean {
+        if (!isSafeSessionName(session)) return false
+        return try {
+            val marker = File(stateRoot, session)
+            !marker.exists() || marker.delete()
+        } catch (_: Throwable) {
+            false
+        }
     }
 
     /** 交付时刻（毫秒）。没有标记返回 null；标记存在但读不出时刻返回 0（调用方按“不敢删”处理） */
@@ -153,13 +213,35 @@ object CacheStore {
         return if (mtime > 0L) mtime else 0L
     }
 
-    /** 会话已经没了，它的交付标记也就没意义了（否则状态目录会一直涨） */
-    private fun pruneStateMarkers(stateRoot: File, remaining: Set<String>) {
+    /**
+     * 清理标记：只删 [seen] 里出现过、且不在 [remaining] 里的。
+     * 这样“清理开始后才新建的会话”绝不会被误删。
+     */
+    private fun pruneStateMarkers(
+        stateRoot: File,
+        seen: Set<String>,
+        remaining: Set<String>,
+        now: Long,
+    ) {
         val markers = stateRoot.listFiles() ?: return
         for (marker in markers) {
-            if (marker.name !in remaining) marker.delete()
+            if (marker.name.endsWith(".tmp")) {
+                // 原子写标记的临时文件：进程在 rename 前被杀会留下它，过了 1 小时就回收。
+                val mtime = marker.lastModified()
+                if (mtime > 0L && now - mtime > TEMP_MARKER_TTL_MS) marker.delete()
+                continue
+            }
+            if (marker.name in seen && marker.name !in remaining) marker.delete()
         }
     }
+
+    private fun isSafeSessionName(session: String): Boolean =
+        session.isNotEmpty() &&
+            session != "." &&
+            session != ".." &&
+            !session.contains('/') &&
+            !session.contains('\\') &&
+            !session.contains('\u0000')
 
     private fun describe(
         entry: File,

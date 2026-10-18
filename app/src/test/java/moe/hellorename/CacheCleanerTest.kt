@@ -141,8 +141,9 @@ class CacheCleanerTest {
     // ---------- 空间预检 ----------
 
     @Test
-    fun `hasRoomFor keeps a reserve`() {
+    fun `hasRoomFor keeps a dynamic reserve`() {
         val need = 100L * 1024 * 1024
+        // 剩余 ~100MB：预留 32MB，差 1 字节都不能放
         assertFalse(
             "刚好放得下也不行：必须留出预留量",
             CacheCleaner.hasRoomFor(need + CacheCleaner.SPACE_RESERVE_BYTES - 1L, need),
@@ -153,6 +154,31 @@ class CacheCleanerTest {
     }
 
     @Test
+    fun `hasRoomFor lets a small file fit on a low storage device`() {
+        // 旧实现硬要 32MB 预留：只剩 20MB 时连 1KB 都不让复制。
+        // 动态预留最多拿剩余空间的 1/4，20MB 只预留 5MB。
+        assertTrue(CacheCleaner.hasRoomFor(20L * 1024 * 1024, 1024L))
+        assertEquals(5L * 1024 * 1024, CacheCleaner.reserveBytes(20L * 1024 * 1024))
+        assertEquals(0L, CacheCleaner.reserveBytes(0L))
+        assertEquals(8L * 1024 * 1024, CacheCleaner.reserveBytes(32L * 1024 * 1024))
+    }
+
+    @Test
+    fun `unknown streams are capped by 2GB and by free space`() {
+        assertEquals(
+            CacheCleaner.MAX_UNKNOWN_STREAM_BYTES,
+            CacheCleaner.maxBytesForUnknownStream(0L),
+        )
+        assertEquals(
+            CacheCleaner.MAX_UNKNOWN_STREAM_BYTES,
+            CacheCleaner.maxBytesForUnknownStream(100L * 1024 * 1024 * 1024),
+        )
+        // 20MB 可写：预留 5MB，最多复制 15MB
+        assertEquals(15L * 1024 * 1024, CacheCleaner.maxBytesForUnknownStream(20L * 1024 * 1024))
+        assertEquals(1L, CacheCleaner.maxBytesForUnknownStream(1L))
+    }
+
+    @Test
     fun `isNoSpace recognises the usual messages`() {
         assertTrue(CacheCleaner.isNoSpace(IOException("ENOSPC (No space left on device)")))
         assertTrue(CacheCleaner.isNoSpace(IllegalStateException("write failed: no space left")))
@@ -160,6 +186,9 @@ class CacheCleanerTest {
             "原因藏在 cause 里也要认出来",
             CacheCleaner.isNoSpace(RuntimeException("copy failed", IOException("ENOSPC"))),
         )
+        assertTrue(CacheCleaner.isNoSpace(IOException("There is not enough space on the disk")))
+        assertTrue(CacheCleaner.isNoSpace(IOException("disk full")))
+        assertTrue(CacheCleaner.isNoSpace(IOException("quota exceeded")))
         assertFalse(CacheCleaner.isNoSpace(IOException("connection reset by peer")))
         assertFalse(CacheCleaner.isNoSpace(IOException()))
     }
@@ -200,6 +229,71 @@ class CacheCleanerTest {
         assertNull("没有标记就是未交付", CacheStore.deliveredAt(state, "nope"))
         assertTrue(CacheStore.markDelivered(state, "1700000000000-9", now))
         assertEquals(now, CacheStore.deliveredAt(state, "1700000000000-9"))
+        assertTrue("分享启动失败要能回滚标记", CacheStore.clearDelivered(state, "1700000000000-9"))
+        assertNull(CacheStore.deliveredAt(state, "1700000000000-9"))
+    }
+
+    @Test
+    fun `markDelivered is atomic and leaves no temp files`() {
+        assertTrue(CacheStore.markDelivered(state, "atomic", now))
+        val names = state.listFiles().orEmpty().map { it.name }
+        assertEquals(listOf("atomic"), names)
+        assertTrue("不能留下半个临时标记", names.none { it.endsWith(".tmp") })
+    }
+
+    @Test
+    fun `cleanup does not delete a marker for a session it never listed`() {
+        // 竞态：cleanup 列完目录之后，用户又完成了一次分享并写了新会话的标记。
+        // 旧实现 prune 所有不在 remaining 里的标记，会把这条新标记删掉。
+        val stale = session("1700000000000-1", dirMtime = now - 60 * 60 * 1000L)
+        assertTrue(CacheStore.markDelivered(state, "brand-new-session", now))
+
+        val report = CacheStore.cleanup(shared, state, emptySet(), now)
+
+        assertFalse(stale.exists())
+        assertEquals(1, report.deleted)
+        assertNotNull(
+            "清理开始后才出现的会话标记绝不能被误删",
+            CacheStore.deliveredAt(state, "brand-new-session"),
+        )
+    }
+
+    @Test
+    fun `cleanup does not prune markers when the shared listing fails`() {
+        assertTrue(state.mkdirs() || state.isDirectory)
+        assertTrue(CacheStore.markDelivered(state, "kept", now))
+        // listFiles() 对普通文件返回 null；旧实现把它当成空目录，清空所有标记。
+        val notADirectory = File(tmp.root, "not-a-directory")
+        notADirectory.writeText("x")
+
+        val report = CacheStore.cleanup(notADirectory, state, emptySet(), now)
+
+        assertEquals(0, report.deleted)
+        assertNotNull(
+            "读不到目录内容时不能把交付标记当成孤儿",
+            CacheStore.deliveredAt(state, "kept"),
+        )
+    }
+
+    @Test
+    fun `stale atomic-write temp files are cleaned but fresh ones are kept`() {
+        assertTrue(state.mkdirs() || state.isDirectory)
+        val oldTemp = File(state, ".old.123.tmp").apply { writeText("1") }
+        touch(oldTemp, now - 2 * 60 * 60 * 1000L)
+        val freshTemp = File(state, ".fresh.456.tmp").apply { writeText("2") }
+        touch(freshTemp, now)
+
+        CacheStore.cleanup(shared, state, emptySet(), now)
+
+        assertFalse(oldTemp.exists())
+        assertTrue("刚写的临时标记可能还在 rename 途中，不能删", freshTemp.exists())
+    }
+
+    @Test
+    fun `markDelivered rejects path like session names`() {
+        assertFalse(CacheStore.markDelivered(state, "../escape", now))
+        assertFalse(CacheStore.markDelivered(state, "", now))
+        assertFalse(CacheStore.clearDelivered(state, "../escape"))
     }
 
     @Test
@@ -281,9 +375,14 @@ class CacheCleanerTest {
 
     @Test
     fun `session names stay unique within the same millisecond`() {
-        // 只用时间戳时，同一毫秒内的两次复制会共用目录并互相覆盖
-        assertEquals("1700000000000-1", CacheStore.newSessionName(now, 1))
-        assertTrue(CacheStore.newSessionName(now, 1) != CacheStore.newSessionName(now, 2))
+        // 只用时间戳 + 会话号时，进程重启/时钟回拨后仍可能撞上旧目录；UUID 后缀把概率降到可忽略。
+        val first = CacheStore.newSessionName(now, 1, token = "aaaa")
+        val second = CacheStore.newSessionName(now, 1, token = "bbbb")
+        assertEquals("1700000000000-1-aaaa", first)
+        assertTrue(first != second)
+        val random = CacheStore.newSessionName(now, 1)
+        assertTrue(random.startsWith("1700000000000-1-"))
+        assertTrue(random.length > "1700000000000-1-".length)
     }
 
     @Test
@@ -294,6 +393,15 @@ class CacheCleanerTest {
             CacheState.shouldCleanup(now + CacheCleaner.MIN_CLEANUP_INTERVAL_MS + 1L, force = false),
         )
         assertTrue("空间不足时的强制清理不受节流限制", CacheState.shouldCleanup(now, force = true))
+    }
+
+    @Test
+    fun `clock rollback does not throttle cleanup forever`() {
+        assertTrue(CacheState.shouldCleanup(now, force = true))
+        // 系统时钟被回拨：旧实现 now - lastCleanupAt 为负数，会一直判定“还没到间隔”。
+        assertTrue(CacheState.shouldCleanup(now - 60_000L, force = false))
+        // 回拨后基准被重置，紧接着的普通触发仍然按正常间隔节流
+        assertFalse(CacheState.shouldCleanup(now - 59_000L, force = false))
     }
 
     // ---------- 与 FileProvider 配置的耦合 ----------

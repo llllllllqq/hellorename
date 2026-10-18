@@ -200,6 +200,57 @@ class FileNameUtilsTest {
         assertEquals(".._.._evil.sh", name)
     }
 
+    @Test
+    fun `ascii prefix followed by emoji is not split into a lone surrogate`() {
+        // 旧实现先 base.take(150)：1 个 ASCII + 149 个 UTF-16 code unit = 末尾落在代理对中间，
+        // UTF-8 编码后变成 '?'。新实现按 code point 截断。
+        val base = "a" + "🎉".repeat(100)
+        val name = FileNameUtils.buildFinalName(base, ".png", "old")
+        assertTrue(name.endsWith(".png"))
+        assertTrue(name.startsWith("a"))
+        assertFalse("不能出现 UTF-8 替换字符", name.contains('\uFFFD'))
+        assertFalse("不能出现被劈开代理对后编码出的问号", name.contains('?'))
+        assertTrue(
+            name.toByteArray(Charsets.UTF_8).size <= FileNameUtils.MAX_NAME_BYTES,
+        )
+    }
+
+    @Test
+    fun `control characters are replaced or removed`() {
+        assertEquals("a_b_c", FileNameUtils.sanitizeBase("a\u0000b\nc"))
+        assertEquals("a_b", FileNameUtils.sanitizeBase("a\u0085b"))
+        assertEquals("a_b", FileNameUtils.sanitizeBase("a\u007Fb"))
+        // 扩展名里的控制符直接删掉，避免出现 `_png` 这种奇怪后缀
+        assertEquals(".png", FileNameUtils.sanitizeExt("p\u0000n\u0085g"))
+        // 孤立代理项编码成 UTF-8 会变成 '?'
+        assertEquals("a_b", FileNameUtils.sanitizeBase("a\uD800b"))
+    }
+
+    @Test
+    fun `bidi controls are removed`() {
+        assertEquals("invoiceexe", FileNameUtils.sanitizeBase("invoice\u202Eexe"))
+        assertEquals("abc", FileNameUtils.sanitizeBase("a\u200Eb\u2066c\u2069"))
+        assertEquals(".png", FileNameUtils.sanitizeExt("p\u202Eng"))
+    }
+
+    @Test
+    fun `takeCodePoints never splits surrogate pairs`() {
+        assertEquals("a🎉", FileNameUtils.takeCodePoints("a🎉🎉", 2))
+        assertEquals("🎉🎉", FileNameUtils.takeLastCodePoints("a🎉🎉", 2))
+        assertFalse(FileNameUtils.takeCodePoints("a🎉🎉", 2).contains('\uFFFD'))
+        assertFalse(FileNameUtils.takeLastCodePoints("a🎉🎉", 2).contains('\uFFFD'))
+    }
+
+    @Test
+    fun `ellipsizeForToast keeps whole emoji`() {
+        val name = "a" + "🎉".repeat(40) + ".png"
+        val short = FileNameUtils.ellipsizeForToast(name, maxChars = 20)
+        assertTrue(short.contains('…'))
+        assertFalse(short.contains('\uFFFD'))
+        assertTrue(short.endsWith(".png"))
+        assertTrue(short.codePointCount(0, short.length) <= 20)
+    }
+
     // ---------- extensionKey ----------
 
     @Test

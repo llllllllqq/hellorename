@@ -28,3 +28,8 @@ keystore.b64
 # ---- python 工具 -追 ----
 __pycache__/
 *.pyc
+
+# ---- 本地构建工具（不提交） ----
+.tooling/
+.gradle-home/
+.android-user/
