@@ -69,8 +69,9 @@ class MainActivityFlowTest {
     fun mainIntent_doesNotClearLoadedFile() {
         val source = newSource()
         val displayName = source.name
+        val originalIntent = sendIntent(uriFor(source))
 
-        ActivityScenario.launch<MainActivity>(sendIntent(uriFor(source))).use { scenario ->
+        ActivityScenario.launch<MainActivity>(originalIntent).use { scenario ->
             waitUntilCopied(scenario)
             onView(withId(R.id.nameInput)).perform(replaceText("keep-me"), closeSoftKeyboard())
 
@@ -81,6 +82,11 @@ class MainActivityFlowTest {
             onView(withId(R.id.nameInput)).check(matches(withText("keep-me")))
             onView(withId(R.id.oldNameText)).check(matches(withText(displayName)))
             onView(withId(R.id.sendButton)).check(matches(isEnabled()))
+
+            // ActivityScenario 只接受与启动 Intent 匹配的生命周期事件；onNewIntent 里 setIntent
+            // 换成 MAIN 后它会把随后的 PAUSED/STOPPED/DESTROYED 全部忽略，close() 就会超时。
+            // 这是测试框架的限制，恢复启动 Intent 让 close() 正常收尾。
+            scenario.onActivity { it.intent = originalIntent }
         }
     }
 
@@ -116,7 +122,8 @@ class MainActivityFlowTest {
     fun textOnlyShare_keepsExistingFile() {
         val source = newSource()
         val displayName = source.name
-        ActivityScenario.launch<MainActivity>(sendIntent(uriFor(source))).use { scenario ->
+        val originalIntent = sendIntent(uriFor(source))
+        ActivityScenario.launch<MainActivity>(originalIntent).use { scenario ->
             waitUntilCopied(scenario)
             onView(withId(R.id.nameInput)).perform(replaceText("still-here"), closeSoftKeyboard())
 
@@ -132,6 +139,7 @@ class MainActivityFlowTest {
 
             onView(withId(R.id.nameInput)).check(matches(withText("still-here")))
             onView(withId(R.id.oldNameText)).check(matches(withText(displayName)))
+            scenario.onActivity { it.intent = originalIntent }
         }
     }
 
