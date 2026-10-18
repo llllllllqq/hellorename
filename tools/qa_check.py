@@ -25,7 +25,7 @@ import zipfile
 
 EXPECTED_PACKAGE = "moe.hellorename"
 EXPECTED_MIN_SDK = 24
-EXPECTED_TARGET_SDK = 34
+EXPECTED_TARGET_SDK = 36
 EXPECTED_ACTIVITY = "moe.hellorename.MainActivity"   # namespace 决定，不随 applicationIdSuffix 变
 EXPECTED_PROVIDER = "androidx.core.content.FileProvider"
 # androidx.core 会用 App 自己的 applicationId 声明一个 signature 级权限用于

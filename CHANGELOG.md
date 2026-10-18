@@ -2,6 +2,28 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)；每个 `v*` tag 会由 GitHub Actions 自动构建并发布 APK。
 
+## [1.4.0] - 2026-10-18
+
+构建工具链升级到 AGP 9 / Gradle 9 / Kotlin 2.4，并把 `compileSdk` / `targetSdk` 升到 **36（Android 16）**。这是一个 minor 版本：targetSdk 36 带来强制 edge-to-edge，界面适配是本次的主要功能性改动。
+
+### Changed（工具链）
+- **AGP 8.5.2 → 9.4.1**，**Gradle 8.9 → 9.6.0**，**Kotlin 2.0.21 → 2.4.21**。
+- 按 AGP 9 的 **built-in Kotlin** 迁移：移除 `org.jetbrains.kotlin.android` 插件；在根 `build.gradle.kts` 的 `buildscript` classpath 中显式指定 KGP 2.4.21，避免沿用 AGP 内置的旧 KGP。
+- release 构建改用 AGP 9.3+ 的 `optimization { enable = false }` DSL，保持当前“不混淆、不 shrink”的行为。
+- AndroidX 依赖升级到当前 stable：core-ktx 1.19.1、appcompat 1.8.0、activity 1.13.0、lifecycle 2.11.0、material 1.14.0、coroutines 1.11.0；AndroidX Test 升到 runner 1.7.0 / ext-junit 1.3.0 / espresso 3.7.0。
+- `compileSdk = 36`、`targetSdk = 36`，`minSdk 24` 不变；Build Tools 使用 AGP 9.4 默认的 36.0.0。
+
+### Changed（Android 16 行为）
+- **强制 edge-to-edge**：targetSdk 36 在 Android 16 上不能再通过 `windowOptOutEdgeToEdgeEnforcement` 退出。`MainActivity` 对 API 35+ 调用 `WindowCompat.setDecorFitsSystemWindows(window, false)`，用 `WindowInsets` 给根布局加系统栏/刘海/IME padding；Toolbar 自身仍保持 56dp，状态栏区域由根布局让出。
+- 状态栏/导航栏图标明暗改用 `WindowInsetsControllerCompat` 跟随深浅色；API 34 及以下保留原有 `statusBarColor` + 系统栏行为。
+- 没有重写返回键，因此 Android 16 的 predictive back 默认行为不需要额外迁移；布局没有锁定方向/宽高比，大屏忽略 `screenOrientation`/`resizableActivity` 限制不会造成额外问题（已有的状态恢复继续覆盖重建）。
+- 未使用 native 库，不涉及 16 KB page size；未使用健康、蓝牙或 `ScheduledExecutorService` 固定频率任务。
+
+### Changed（验证）
+- Emulator 门禁从 **API 34 升到 API 36**，只保留 API 36 主门禁；`ThemeUiTest` 改为 edge-to-edge aware（Toolbar top = 根布局状态栏 padding，而不是 0）。
+- `tools/qa_check.py` 的 targetSdk 期望改为 36。
+- release `versionCode` 最低值提高到 12，确保能覆盖 v1.3.2 的 11。
+
 ## [1.3.2] - 2026-10-18
 
 底层逻辑集中修复：生命周期/状态恢复、保存竞态、缓存交付标记、主线程 Provider 查询、MediaStore/SAF 异常路径、文件名与 Intent 健壮性。全部修复都有对应的 JVM 单测或 API 34 模拟器 instrumentation 覆盖。

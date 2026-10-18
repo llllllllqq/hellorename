@@ -27,7 +27,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
-          gradle-version: '8.9'
+          gradle-version: '9.6.0'
 
       # GitHub 托管 runner 上的 /dev/kvm 默认权限不一定够 emulator 用
       - name: Enable KVM
@@ -43,7 +43,7 @@ jobs:
       - name: Run emulator UI tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
+          api-level: 36
           target: default
           arch: x86_64
           disable-animations: true

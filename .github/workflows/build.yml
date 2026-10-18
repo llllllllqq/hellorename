@@ -31,7 +31,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
-          gradle-version: '8.9'
+          gradle-version: '9.6.0'
 
       - name: Require signing secrets
         env:
@@ -69,9 +69,9 @@ jobs:
           else
             NAME="0.0.1-dev.${GITHUB_RUN_NUMBER}"
           fi
-          # v1.3.1 的 versionCode 是 10；新包必须能覆盖安装。
+          # v1.3.2 的 versionCode 是 11；v1.4.0 必须能覆盖安装。
           CODE="${GITHUB_RUN_NUMBER}"
-          if [ "$CODE" -lt 11 ]; then CODE=11; fi
+          if [ "$CODE" -lt 12 ]; then CODE=12; fi
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
           echo "构建版本: $NAME (versionCode=$CODE)"
