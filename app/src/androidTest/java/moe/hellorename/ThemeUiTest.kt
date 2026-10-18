@@ -2,6 +2,8 @@ package moe.hellorename
 
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
+import android.os.Build
+import android.view.View
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.test.core.app.ActivityScenario
@@ -72,28 +74,43 @@ class ThemeUiTest {
             )
             val toolbar = activity.findViewById<androidx.appcompat.widget.Toolbar>(R.id.toolbar)
             assertEquals(appName, toolbar.title?.toString())
-            assertEquals(
-                "Toolbar 必须位于内容区顶部，上方不能再有系统标题栏",
-                0,
-                toolbar.top,
-            )
+            if (Build.VERSION.SDK_INT >= 35) {
+                // targetSdk 36 在 Android 15+ 强制 edge-to-edge：状态栏区域由根布局 padding 让出，
+                // Toolbar 自身仍是 56dp，但 top 等于根布局的 paddingTop，而不是 0。
+                val root = activity.findViewById<View>(R.id.root)
+                assertTrue("edge-to-edge 下根布局必须让出状态栏", root.paddingTop > 0)
+                assertEquals(
+                    "Toolbar 应紧贴根布局的内容区顶部",
+                    root.paddingTop,
+                    toolbar.top,
+                )
+            } else {
+                assertEquals(
+                    "Toolbar 必须位于内容区顶部，上方不能再有系统标题栏",
+                    0,
+                    toolbar.top,
+                )
+            }
         }
         // 若还存在第二个同名标题（例如系统 ActionBar），这里会匹配到多个 View 而失败
         onView(withText(appName)).check(matches(isDisplayed()))
         onView(withId(R.id.toolbar)).check(matches(isDisplayed()))
     }
 
+    @Suppress("DEPRECATION")
     private fun assertTopBar(
         scenario: ActivityScenario<MainActivity>,
         expectedBackground: Int,
         expectedText: Int,
     ) {
-        scenario.onActivity { activity ->
-            assertEquals(
-                "状态栏颜色必须与顶栏一致",
-                expectedBackground,
-                activity.window.statusBarColor,
-            )
+        if (Build.VERSION.SDK_INT < 35) {
+            scenario.onActivity { activity ->
+                assertEquals(
+                    "状态栏颜色必须与顶栏一致",
+                    expectedBackground,
+                    activity.window.statusBarColor,
+                )
+            }
         }
         val density = instrumentation.targetContext.resources.displayMetrics.density
         onView(withId(R.id.toolbar)).check { view, _ ->

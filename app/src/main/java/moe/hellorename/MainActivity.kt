@@ -6,6 +6,7 @@ import android.content.ClipData
 import android.content.ComponentName
 import android.content.ContentValues
 import android.content.Intent
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -24,6 +25,10 @@ import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.color.MaterialColors
@@ -231,6 +236,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        applyEdgeToEdge()
 
         binding.sendButton.setOnClickListener { onSendClicked() }
         binding.saveButton.setOnClickListener { onSaveClicked() }
@@ -247,6 +253,39 @@ class MainActivity : AppCompatActivity() {
         // 冷启动强制清一次：删除是真实磁盘操作，必须离开主线程（旧实现在这里同步删，攒几个大文件就卡启动）。
         // 放在恢复之后：恢复出来的会话要先登记成 live，清理才不会把它当成旧会话。
         startCleanup(force = true)
+    }
+
+    /**
+     * Android 15+ / targetSdk 36 强制 edge-to-edge，不能再靠 windowOptOutEdgeToEdgeEnforcement。
+     * 根布局用系统栏/IME inset 做 padding：Toolbar 自身仍保持 56dp，状态栏区域只由根布局让出来。
+     * API 34 及以下保持旧的状态栏颜色 + fitsSystemWindows 行为，避免改变老系统外观。
+     */
+    private fun applyEdgeToEdge() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) return
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+        }
+        val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+        WindowInsetsControllerCompat(window, binding.root).apply {
+            isAppearanceLightStatusBars = !night
+            isAppearanceLightNavigationBars = !night
+        }
+        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { view, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+            )
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            view.setPadding(
+                bars.left,
+                bars.top,
+                bars.right,
+                maxOf(bars.bottom, ime.bottom),
+            )
+            insets
+        }
+        ViewCompat.requestApplyInsets(binding.root)
     }
 
     override fun onNewIntent(intent: Intent) {

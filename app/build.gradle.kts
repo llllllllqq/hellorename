@@ -1,8 +1,8 @@
 import java.util.Properties
 
 plugins {
+    // AGP 9 使用 built-in Kotlin，不再 apply org.jetbrains.kotlin.android
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
 }
 
 /**
@@ -32,18 +32,18 @@ val hasReleaseSigning = sigStoreFile != null && sigStorePassword != null &&
 
 // 版本号 / applicationId 可由 CI 覆盖：
 //   -PversionName=1.2.3 -PversionCode=42 [-PapplicationIdSuffix=.debug]
-val appVersionName = (project.findProperty("versionName") as String?)?.takeIf { it.isNotBlank() } ?: "1.3.2"
-val appVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 11
+val appVersionName = (project.findProperty("versionName") as String?)?.takeIf { it.isNotBlank() } ?: "1.4.0"
+val appVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 12
 val appIdSuffix = (project.findProperty("applicationIdSuffix") as String?)?.takeIf { it.isNotBlank() } ?: ""
 
 android {
     namespace = "moe.hellorename"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "moe.hellorename$appIdSuffix"
         minSdk = 24
-        targetSdk = 34
+        targetSdk = 36
         versionCode = appVersionCode
         versionName = appVersionName
 
@@ -69,12 +69,10 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
-            isShrinkResources = false
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro",
-            )
+            // AGP 9.3+ 的新优化 DSL：保持当前“不混淆、不 shrink”的行为，升级与优化分开做。
+            optimization {
+                enable = false
+            }
             signingConfig = if (hasReleaseSigning) {
                 signingConfigs.getByName("release")
             } else {
@@ -109,16 +107,17 @@ kotlin {
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("androidx.activity:activity-ktx:1.9.2")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
-    implementation("com.google.android.material:material:1.12.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    // core-ktx 1.19.x 的 AAR metadata 要求 compileSdk 37；本项目 compileSdk 固定 36，故用 1.18.0。
+    implementation("androidx.core:core-ktx:1.18.0")
+    implementation("androidx.appcompat:appcompat:1.8.0")
+    implementation("androidx.activity:activity-ktx:1.13.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.11.0")
+    implementation("com.google.android.material:material:1.14.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 
     testImplementation("junit:junit:4.13.2")
 
-    androidTestImplementation("androidx.test:runner:1.6.2")
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
-    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
 }
