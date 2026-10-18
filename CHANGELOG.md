@@ -2,6 +2,21 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)；每个 `v*` tag 会由 GitHub Actions 自动构建并发布 APK。
 
+## [1.3.1] - 2026-10-18
+
+修复 v1.3.0 的重复标题，并把云端模拟器 UI 验证设为发布前的硬门槛。
+
+### Fixed
+- **界面出现两个标题**：v1.3.0 给 Activity 加了自绘 56dp Toolbar，但主题仍继承 `Theme.Material3.DayNight`（自带系统 ActionBar），于是系统标题栏和自绘顶栏各显示一次应用名。现在改为 `Theme.Material3.DayNight.NoActionBar`，只保留与页面同色的 56dp 顶栏。
+
+### Added
+- **云端模拟器 UI 门禁**：新增 `.github/workflows/emulator-ui.yml`，由 QA 与 Release 复用。在 GitHub Actions 的 API 34 模拟器上运行 instrumentation 测试，断言：
+  - `supportActionBar` 必须为 null，且全屏只有一个应用名标题；
+  - 顶栏紧贴内容区顶部，高度恰好 56dp；
+  - 浅色模式白底黑字、深色模式黑底白字。
+- 验证通过后额外截取浅色 / 深色两张截图和 UI 层级，作为 Actions artifact 留存。
+- **Release workflow 以模拟器验证为前置依赖**：`release` job 通过 `needs: emulator-verify` 等待模拟器门禁；门禁失败时不会构建、更不会发布。
+
 ## [1.3.0] - 2026-10-18
 
 界面与命名更新：英文应用名改为 **HelloRename**；应用内跟随系统深色 / 浅色模式自动切换，只保留黑白两套默认配色。

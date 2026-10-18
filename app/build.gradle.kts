@@ -46,6 +46,9 @@ android {
         targetSdk = 34
         versionCode = appVersionCode
         versionName = appVersionName
+
+        // 云端模拟器 UI 验证（.github/workflows/emulator-ui.yml）依赖 instrumentation 测试
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -114,4 +117,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
     testImplementation("junit:junit:4.13.2")
+
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
 }

@@ -3,8 +3,11 @@
     <!--
         浅色 / 深色两套配色只由 values 与 values-night 的同一组颜色资源决定；
         这里不再为深色模式单独复制一份主题，避免两处颜色漂移。
+
+        必须使用 NoActionBar：Activity 自己已经有一个 56dp 的 Toolbar，
+        若主题再带系统 ActionBar，就会出现上下两个标题（v1.3.0 的实际 bug）。
     -->
-    <style name="Theme.Hellorename" parent="Theme.Material3.DayNight">
+    <style name="Theme.Hellorename" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">@color/brand_primary</item>
         <item name="colorOnPrimary">@color/brand_on_primary</item>
         <item name="colorPrimaryContainer">@color/brand_primary_container</item>

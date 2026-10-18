@@ -73,8 +73,18 @@ HelloRename 就是干这件事的：
 
 ### 云端（推荐，本仓库就是这么发的包）
 
-- 推到 `main` / 开 PR → `QA` workflow：单元测试 → Lint 门禁 → 构建 release APK → APK 出厂体检。QA 产物带 `.debug` 包名后缀（`moe.hellorename.debug`），可以和正式包同时装在手机上。
-- 打 `v*` tag → `Release APK` workflow：要求签名 Secrets → 构建 → 体检 → 创建 Release（附 APK 与 `SHA256SUMS.txt`，说明自动取自 `CHANGELOG.md`）。
+- 推到 `main` / 开 PR → `QA` workflow：单元测试 → Lint 门禁 → 构建 release APK → APK 出厂体检；同时并行跑云端模拟器 UI 验证。QA 产物带 `.debug` 包名后缀（`moe.hellorename.debug`），可以和正式包同时装在手机上。
+- 打 `v*` tag → `Release APK` workflow：**先跑云端模拟器 UI 验证** → 要求签名 Secrets → 构建 → 体检 → 创建 Release（附 APK 与 `SHA256SUMS.txt`，说明自动取自 `CHANGELOG.md`）。
+
+### 云端模拟器 UI 验证（发布前硬门槛）
+
+`.github/workflows/emulator-ui.yml` 在 GitHub Actions 的 API 34 模拟器上执行 `connectedDebugAndroidTest`，断言：
+
+- 系统 ActionBar 必须关闭，全屏只有一个应用名标题（防止出现 v1.3.0 那样上下两个标题）；
+- 顶栏紧贴内容区顶部，高度恰好 **56dp**；
+- 浅色模式白底黑字、深色模式黑底白字。
+
+Release workflow 的 `release` job 通过 `needs: emulator-verify` 依赖这项验证；模拟器不通过就不会构建发布包，更不会创建 Release。测试结束后会上传浅色 / 深色截图与 UI 层级作为 Actions artifact，方便人工复核。
 
 ### 出厂前自动体检（`tools/qa_check.py`）
 

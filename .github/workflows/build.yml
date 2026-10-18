@@ -9,8 +9,13 @@ permissions:
   contents: write
 
 jobs:
+  emulator-verify:
+    name: Emulator UI verification
+    uses: ./.github/workflows/emulator-ui.yml
+
   release:
     name: Build & publish release APK
+    needs: emulator-verify
     runs-on: ubuntu-latest
 
     steps:
