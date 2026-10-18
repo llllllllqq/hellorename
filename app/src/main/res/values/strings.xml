@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">hellorename</string>
+    <string name="app_name">HelloRename</string>
     <string name="chooser_title">Share renamed file</string>
 
     <string name="label_original_name">Original file name</string>

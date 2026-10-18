@@ -2,7 +2,7 @@
 
 **分享 → 改名 → 再分享。** 一个极简的 Android 小工具：接收其他 App 分享过来的文件，改好名字后，再把文件分享给别的 App。
 
-> 中文系统下，应用名显示为 **改名助手**（英文/其他语系显示 `hellorename`）。
+> 中文系统下，应用名显示为 **改名助手**（英文/其他语系显示 `HelloRename`）。
 
 [![QA](https://github.com/llllllllqq/hellorename/actions/workflows/qa.yml/badge.svg)](https://github.com/llllllllqq/hellorename/actions/workflows/qa.yml)
 [![Release APK](https://github.com/llllllllqq/hellorename/actions/workflows/build.yml/badge.svg)](https://github.com/llllllllqq/hellorename/actions/workflows/build.yml)
@@ -15,7 +15,7 @@
 
 Android 系统分享面板本身没有“改名后再分享”的能力：接收方拿到的 `content://` URI 是**临时且不可转发**的授权，而且没有任何 API 能改别人的文件名（改名本质上是**换个名字重新提供同一份数据**）。
 
-hellorename 就是干这件事的：
+HelloRename 就是干这件事的：
 
 1. 出现在系统分享面板里，接收任意类型的文件（`ACTION_SEND` / `ACTION_SEND_MULTIPLE`）。
 2. 上半部分显示**旧文件名.扩展名**（可长按复制）。
@@ -24,6 +24,7 @@ hellorename 就是干这件事的：
 5. 输入框下方并排两个按钮：**发送**（丢进系统分享面板再分享）和**保存到下载**（Android 10+ 走 MediaStore 直写、Android 7–9 走 SAF 选择器，同样零权限）。
 6. 发送或保存成功后 **Toast 提示并自动关闭主界面**，避免用户在分享面板里又把文件选回本应用。
 7. 底部固定一条红色警示语，提醒发送后在分享面板选择其它应用接收、勿再选本应用，防止无限循环。
+8. **跟随系统的深色 / 浅色模式**：只保留白底黑字、黑底白字两套默认配色；顶部 56dp 应用栏与页面同色，不提供自定义颜色入口。
 
 ## 设计取舍（为什么这么实现）
 
@@ -61,7 +62,7 @@ hellorename 就是干这件事的：
 ## 使用
 
 ```
-任意 App → 分享 → hellorename → 改名字 → 发送 → 系统分享面板 → 目标 App
+任意 App → 分享 → HelloRename → 改名字 → 发送 → 系统分享面板 → 目标 App
 ```
 
 - 从启动器直接打开时，可以点“选择一个文件”（走 SAF），方便自测。

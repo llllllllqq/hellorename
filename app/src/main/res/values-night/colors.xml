@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        深色模式：黑底白字。
+        与 values/colors.xml 的浅色模式一一对应，只保留这一套默认深色配色。
+    -->
+    <color name="app_background">#FF000000</color>
+    <color name="app_on_background">#FFFFFFFF</color>
+    <color name="app_on_background_variant">#FFB0B0B0</color>
+    <color name="app_surface_variant">#FF1E1E1E</color>
+    <color name="app_outline">#FF666666</color>
+
+    <color name="brand_primary">#FFFFFFFF</color>
+    <color name="brand_on_primary">#FF000000</color>
+    <color name="brand_primary_container">#FF1E1E1E</color>
+    <color name="brand_on_primary_container">#FFFFFFFF</color>
+    <color name="brand_secondary_container">#FF1E1E1E</color>
+    <color name="brand_on_secondary_container">#FFFFFFFF</color>
+
+    <color name="status_error">#FFFF8A80</color>
+</resources>

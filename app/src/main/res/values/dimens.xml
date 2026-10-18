@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        顶部应用栏高度：与 hellowidget 首页顶栏的默认值保持一致（固定 56dp）。
+        写成固定值而不是 ?attr/actionBarSize，系统栏（状态栏 / 刘海）的高度由系统自己占位，
+        不会挤压这一条的内容。
+    -->
+    <dimen name="top_bar_height">56dp</dimen>
+</resources>

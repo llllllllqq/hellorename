@@ -1,9 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="brand_primary">#1565C0</color>
-    <color name="brand_on_primary">#FFFFFF</color>
-    <color name="brand_primary_container">#D6E3FF</color>
-    <color name="brand_on_primary_container">#001B3F</color>
+    <!--
+        浅色模式（默认）：白底黑字。
+        深色模式见 values-night/colors.xml（黑底白字）。
+        应用内只保留这两套默认配色，不提供任何用户自定义颜色的入口。
+    -->
+    <color name="app_background">#FFFFFFFF</color>
+    <color name="app_on_background">#FF000000</color>
+    <color name="app_on_background_variant">#FF5F5F5F</color>
+    <color name="app_surface_variant">#FFF2F2F2</color>
+    <color name="app_outline">#FFBDBDBD</color>
+
+    <!-- 按钮 / 输入框 / 勾选框等 Material 组件也走黑白两色，不再保留品牌蓝 -->
+    <color name="brand_primary">#FF000000</color>
+    <color name="brand_on_primary">#FFFFFFFF</color>
+    <color name="brand_primary_container">#FFF2F2F2</color>
+    <color name="brand_on_primary_container">#FF000000</color>
+    <color name="brand_secondary_container">#FFF2F2F2</color>
+    <color name="brand_on_secondary_container">#FF000000</color>
+
     <color name="ic_launcher_background">#1565C0</color>
-    <color name="status_error">#B3261E</color>
+    <color name="status_error">#FFB3261E</color>
 </resources>

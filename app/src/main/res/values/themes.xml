@@ -1,9 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!--
+        浅色 / 深色两套配色只由 values 与 values-night 的同一组颜色资源决定；
+        这里不再为深色模式单独复制一份主题，避免两处颜色漂移。
+    -->
     <style name="Theme.Hellorename" parent="Theme.Material3.DayNight">
         <item name="colorPrimary">@color/brand_primary</item>
         <item name="colorOnPrimary">@color/brand_on_primary</item>
         <item name="colorPrimaryContainer">@color/brand_primary_container</item>
         <item name="colorOnPrimaryContainer">@color/brand_on_primary_container</item>
+        <item name="colorSecondary">@color/brand_primary</item>
+        <item name="colorOnSecondary">@color/brand_on_primary</item>
+        <item name="colorSecondaryContainer">@color/brand_secondary_container</item>
+        <item name="colorOnSecondaryContainer">@color/brand_on_secondary_container</item>
+
+        <!-- 页面主体：浅色白底黑字，深色黑底白字（values-night/colors.xml） -->
+        <item name="colorSurface">@color/app_background</item>
+        <item name="colorOnSurface">@color/app_on_background</item>
+        <item name="colorSurfaceVariant">@color/app_surface_variant</item>
+        <item name="colorOnSurfaceVariant">@color/app_on_background_variant</item>
+        <item name="colorOutline">@color/app_outline</item>
+        <item name="android:colorBackground">@color/app_background</item>
+        <item name="colorOnBackground">@color/app_on_background</item>
+        <item name="android:windowBackground">@color/app_background</item>
+
+        <!-- 状态栏与顶栏/内容同色；图标明暗随浅色/深色模式自动切换 -->
+        <item name="android:statusBarColor">@color/app_background</item>
+        <item name="android:windowLightStatusBar">@bool/is_light_theme</item>
     </style>
 </resources>
