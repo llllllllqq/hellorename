@@ -27,6 +27,7 @@ HelloRename 就是干这件事的：
 8. **跟随系统的深色 / 浅色模式**：只保留白底黑字、黑底白字两套默认配色；顶部 56dp 应用栏与页面同色，不提供自定义颜色入口。
 9. **切换深浅色/字体/语言不丢状态**：Activity 重建后恢复已选文件、输入框内容、扩展名锁定和复制进度；从桌面重进不会清空当前文件。
 10. **分享面板不再列出本应用**：除了底部警示语，chooser 还通过 `EXTRA_EXCLUDE_COMPONENTS` 排除 HelloRename，进一步避免自循环。
+11. **文件校验值**：复制完成后对缓存文件做一次只读回读，显示 MD5 / SHA-1 / SHA-256，支持逐行选择或一键复制全部，方便和源文件对比。
 
 ## 设计取舍（为什么这么实现）
 
@@ -87,7 +88,7 @@ HelloRename 就是干这件事的：
 `.github/workflows/emulator-ui.yml` 在 GitHub Actions 的 API 36 模拟器上执行 `connectedDebugAndroidTest`：
 
 - **主题门禁**：系统 ActionBar 必须关闭，全屏只有一个应用名标题（防止出现 v1.3.0 那样上下两个标题）；顶栏高度恰好 **56dp**，Android 15+ 强制 edge-to-edge 时由根布局让出状态栏/导航栏/IME inset；浅色模式白底黑字、深色模式黑底白字。
-- **主流程门禁**（v1.3.2 起）：分享文件 → 等待复制 → 输入新名字 → `ActivityScenario.recreate()` 后输入/旧文件名/复制状态仍在；`ACTION_MAIN` 重进不清空；异常 `EXTRA_STREAM` 不崩溃；`Parcelable[]` 形式仍能识别。
+- **主流程门禁**（v1.3.2 起，v1.5.0 增加校验值）：分享文件 → 等待复制和校验值计算 → 输入新名字 → `ActivityScenario.recreate()` 后输入/旧文件名/复制状态/MD5/SHA-1/SHA-256 仍在；`ACTION_MAIN` 重进不清空；异常 `EXTRA_STREAM` 不崩溃；`Parcelable[]` 形式仍能识别。
 
 Release workflow 的 `release` job 通过 `needs: emulator-verify` 依赖这项验证；模拟器不通过就不会构建发布包，更不会创建 Release。测试结束后会上传测试报告、浅色 / 深色截图与 UI 层级作为 Actions artifact，方便人工复核。
 
@@ -146,7 +147,7 @@ gradle assembleRelease                               # 或 ./gradlew assembleRel
 环境：JDK 17、Gradle 9.6.0、AGP 9.4.1、Kotlin 2.4.21、compileSdk 36、targetSdk 36、minSdk 24。单元测试：
 
 ```bash
-gradle test                    # 71 条 JVM 单测（文件名/缓存/流复制/操作代际）
+gradle test                    # 78 条 JVM 单测（文件名/缓存/流复制/操作代际/校验值）
 gradle connectedDebugAndroidTest   # 需要模拟器或真机；API 36 门禁
 ```
 
@@ -162,6 +163,7 @@ gradle connectedDebugAndroidTest   # 需要模拟器或真机；API 36 门禁
 - 文件名中的 `/ : * ? " < > |` 等非法字符、C0/C1 控制字符会被替换成 `_`，双向控制符（bidi）会被移除，结尾的点会被去掉（避免 `../` 之类的路径穿越和文件名伪装）。
 - 新文件名按 **code point + UTF-8 字节数**截断（上限 240 字节，中文约 78 字，扩展名始终完整保留），因为 `ext4/f2fs` 的单个文件名上限是 255 字节而不是 255 个字符；emoji 不会被劈成半个。
 - 文案默认英文，中文放在 `values-zh`（所有中文语系都会命中）。
+- 校验值是在复制完成后对缓存文件做一次完整回读计算的，因此大文件会额外花一次读盘时间；计算期间发送/保存按钮保持禁用并显示进度。
 - 分享面板弹出后你没法知道对方何时读完文件，所以临时文件已交付的按交付时刻保温 24 小时；未交付的在离开界面 30 分钟后按 10 分钟 TTL 回收。
 - SAF 保存路径只在 Android 7–9 使用。API 36 模拟器门禁走 MediaStore；`wt` 回退、截断和取消清理目前靠代码审查 + API 28 人工验证，没有把 API 28 放进自动矩阵（这是 v1.4.0 的验证边界）。
 

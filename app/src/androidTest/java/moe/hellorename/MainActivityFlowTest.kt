@@ -3,7 +3,9 @@ package moe.hellorename
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.view.View
 import android.widget.Button
+import android.widget.TextView
 import androidx.core.content.FileProvider
 import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso.onView
@@ -17,18 +19,19 @@ import androidx.test.espresso.matcher.ViewMatchers.withText
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.hamcrest.CoreMatchers.not
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
 
 /**
- * API 34 模拟器上的主流程 / 生命周期测试（v1.3.2 起由 QA 与 Release 的模拟器门禁执行）。
+ * API 36 模拟器上的主流程 / 生命周期测试（由 QA 与 Release 的模拟器门禁执行）。
  *
- * 用 file:// URI 提供测试源文件：测试与被测应用同 UID，ContentResolver 能直接打开，
- * 不需要额外声明测试 Provider。覆盖：
- *  - 分享进入 → 复制完成；
- *  - 配置重建后输入/旧文件名/复制状态不丢（H1）；
+ * 用 FileProvider content:// URI 提供测试源文件，覆盖：
+ *  - 分享进入 → 复制完成 → 显示 MD5/SHA-1/SHA-256；
+ *  - 配置重建后输入/旧文件名/复制状态/校验值不丢（H1）；
  *  - ACTION_MAIN 重进不清空当前文件（L6）；
  *  - 异常 EXTRA_STREAM 不崩溃（L5）；
  *  - Parcelable[] 形式的 EXTRA_STREAM 仍能识别。
@@ -140,6 +143,43 @@ class MainActivityFlowTest {
             onView(withId(R.id.nameInput)).check(matches(withText("still-here")))
             onView(withId(R.id.oldNameText)).check(matches(withText(displayName)))
             scenario.onActivity { it.intent = originalIntent }
+        }
+    }
+
+    @Test
+    fun checksums_areShown_andSurviveRecreate() {
+        val source = newSource()
+        val originalIntent = sendIntent(uriFor(source))
+        ActivityScenario.launch<MainActivity>(originalIntent).use { scenario ->
+            waitUntilCopied(scenario)
+            assertChecksums(scenario)
+
+            scenario.recreate()
+
+            assertChecksums(scenario)
+            onView(withId(R.id.sendButton)).check(matches(isEnabled()))
+        }
+    }
+
+    private fun assertChecksums(scenario: ActivityScenario<MainActivity>) {
+        scenario.onActivity { activity ->
+            assertEquals(
+                "checksum section should be visible after copy",
+                View.VISIBLE,
+                activity.findViewById<View>(R.id.checksumSection).visibility,
+            )
+            val md5 = activity.findViewById<TextView>(R.id.checksumMd5).text.toString()
+            val sha1 = activity.findViewById<TextView>(R.id.checksumSha1).text.toString()
+            val sha256 = activity.findViewById<TextView>(R.id.checksumSha256).text.toString()
+            assertTrue(md5, md5.contains("00184e6135af969e09086d0058d53385"))
+            assertTrue(sha1, sha1.contains("325955adedc149e2f90962bb2b30374b6973023b"))
+            assertTrue(
+                sha256,
+                sha256.contains(
+                    "854f0a004368659f7ac3df08e942c3e5" +
+                        "d0a31ad534d2deb8f602f11ecd2c302f",
+                ),
+            )
         }
     }
 
