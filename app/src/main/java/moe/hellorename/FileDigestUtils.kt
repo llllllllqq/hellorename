@@ -67,9 +67,9 @@ object FileDigestUtils {
         }
         if (cancelled()) return null
         return FileChecksums(
-            md5 = md5.digest().toHex(),
-            sha1 = sha1.digest().toHex(),
-            sha256 = sha256.digest().toHex(),
+            md5 = toHex(md5.digest()),
+            sha1 = toHex(sha1.digest()),
+            sha256 = toHex(sha256.digest()),
         )
     }
 
