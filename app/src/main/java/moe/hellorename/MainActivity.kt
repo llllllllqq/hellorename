@@ -3,6 +3,7 @@ package moe.hellorename
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.ContentValues
 import android.content.Intent
@@ -97,11 +98,19 @@ class MainActivity : AppCompatActivity() {
     private var backgroundJob: Job? = null
     private var copyDone = false
 
+    /** 复制完成后对缓存文件回读计算的校验值；null = 尚未算出/已失效 */
+    private var checksums: FileChecksums? = null
+
     /** 已经交给系统分享面板的绝对路径，不允许再被 rename/删除 */
     private val handedOutPaths = mutableSetOf<String>()
 
     private val lastPercent = AtomicInteger(-1)
     private val lastReportedBytes = AtomicLong(0L)
+    private val hashPercent = AtomicInteger(-1)
+
+    /** 哈希阶段已结束的代际：迟到的哈希进度不能再覆盖“完成/失败”状态 */
+    @Volatile
+    private var hashFinishedGeneration = -1L
 
     /** 操作代际：新分享/重置/重建都会换代 */
     private val operations = OperationRegistry()
@@ -242,6 +251,7 @@ class MainActivity : AppCompatActivity() {
         binding.saveButton.setOnClickListener { onSaveClicked() }
         binding.pickButton.setOnClickListener { pickFile.launch(arrayOf("*/*")) }
         binding.allowExtCheck.setOnCheckedChangeListener { _, isChecked -> applyExtLock(!isChecked) }
+        binding.copyChecksumsButton.setOnClickListener { copyChecksumsToClipboard() }
 
         if (savedInstanceState != null) {
             // 配置变更/进程重建：优先恢复，不再无条件重放原始 Intent。
@@ -308,6 +318,9 @@ class MainActivity : AppCompatActivity() {
         outState.putString(KEY_SESSION_DIR, sessionDir?.absolutePath)
         outState.putString(KEY_CURRENT_FILE, currentFile?.absolutePath)
         outState.putBoolean(KEY_COPY_DONE, copyDone)
+        outState.putString(KEY_MD5, checksums?.md5)
+        outState.putString(KEY_SHA1, checksums?.sha1)
+        outState.putString(KEY_SHA256, checksums?.sha256)
         outState.putString(KEY_INPUT, binding.nameInput.text?.toString().orEmpty())
         outState.putBoolean(KEY_EXT_LOCKED, lockedExt != null)
         outState.putString(KEY_LOCKED_EXT, lockedExt.orEmpty())
@@ -432,11 +445,13 @@ class MainActivity : AppCompatActivity() {
         sourceSize = -1L
         currentFile = null
         copyDone = false
+        checksums = null
         preparingFile = false
         wasSaving = false
         savePendingFile = null
         handedOutPaths.clear()
 
+        hideChecksums()
         binding.oldNameText.text = getString(R.string.old_name_loading)
         binding.pickButton.visibility = View.GONE
         binding.allowExtCheck.setOnCheckedChangeListener(null)
@@ -550,6 +565,7 @@ class MainActivity : AppCompatActivity() {
         originalExt = state.getString(KEY_ORIGINAL_EXT).orEmpty()
         sourceSize = state.getLong(KEY_SOURCE_SIZE, -1L)
         copyDone = state.getBoolean(KEY_COPY_DONE, false)
+        checksums = readChecksums(state)
 
         val savedDir = state.getString(KEY_SESSION_DIR)?.let(::File)
         sessionDir = savedDir?.takeIf { isSessionDir(it) }
@@ -558,7 +574,7 @@ class MainActivity : AppCompatActivity() {
         if (sessionDir == null) {
             sessionDir = currentFile?.parentFile?.takeIf { isSessionDir(it) }
         }
-        if (currentFile == null) copyDone = false
+        if (currentFile == null || checksums == null) copyDone = false
 
         lockedExt = if (state.getBoolean(KEY_EXT_LOCKED, false)) {
             state.getString(KEY_LOCKED_EXT).orEmpty()
@@ -583,6 +599,7 @@ class MainActivity : AppCompatActivity() {
         binding.progress.visibility = View.GONE
         lastPercent.set(-1)
         lastReportedBytes.set(0L)
+        if (copyDone && checksums != null) showChecksums(checksums!!) else hideChecksums()
 
         if (savePendingFile != null) {
             // SAF 选择器还开着（或结果还没回来）：恢复待保存文件，等回调。
@@ -646,6 +663,9 @@ class MainActivity : AppCompatActivity() {
         releaseSessionDir()
         startCleanup(force = false)
         loadingMeta = false
+        checksums = null
+        hashFinishedGeneration = -1L
+        hideChecksums()
 
         // 目录名带时间戳 + 会话号 + UUID：时钟回拨/进程重启/同毫秒都不会复用旧目录。
         var dir: File
@@ -668,6 +688,8 @@ class MainActivity : AppCompatActivity() {
         sessionDir = dir
         currentFile = target
         copyDone = false
+        checksums = null
+        hideChecksums()
         finishedGeneration = -1L
         lastPercent.set(-1)
         lastReportedBytes.set(0L)
@@ -699,11 +721,59 @@ class MainActivity : AppCompatActivity() {
             // 会话已换代或本协程被取消：什么都不许碰，避免把新状态覆盖掉
             if (!isActive || !operations.isCurrent(generation)) return@launch
             finishedGeneration = generation
+
+            if (outcome == CopyOutcome.OK) {
+                // 复制成功后再回读缓存文件算校验值：这是真正会被分享/保存的那份文件。
+                // 如果写盘时发生损坏，用户拿这里的值和源文件对比就能发现。
+                binding.progress.isIndeterminate = true
+                binding.progress.progress = 0
+                binding.progress.visibility = View.VISIBLE
+                lastPercent.set(-1)
+                hashPercent.set(-1)
+                hashFinishedGeneration = -1L
+                setStatus(getString(R.string.status_hashing), isError = false)
+
+                val hashes = try {
+                    withContext(Dispatchers.IO) {
+                        FileDigestUtils.hashFile(
+                            file = target,
+                            cancelled = { !operations.isCurrent(generation) },
+                        ) { read, total -> onHashProgress(generation, read, total) }
+                    }
+                } catch (cancel: CancellationException) {
+                    throw cancel
+                } catch (_: Throwable) {
+                    null
+                }
+
+                if (!isActive || !operations.isCurrent(generation)) return@launch
+                hashFinishedGeneration = generation
+                if (hashes == null) {
+                    target.delete()
+                    currentFile = null
+                    releaseSessionDir()
+                    copyDone = false
+                    binding.progress.visibility = View.GONE
+                    setButtonsEnabled(true)
+                    setStatus(getString(R.string.status_hash_failed), isError = true)
+                    return@launch
+                }
+
+                checksums = hashes
+                showChecksums(hashes)
+                copyDone = true
+                binding.progress.visibility = View.GONE
+                setButtonsEnabled(true)
+                setStatus(getString(R.string.status_ready), isError = false)
+                return@launch
+            }
+
+            // 复制失败：不保留半套校验值，按钮保持可点以便重试。
             binding.progress.visibility = View.GONE
-            copyDone = outcome == CopyOutcome.OK
+            copyDone = false
+            hideChecksums()
             setButtonsEnabled(true)
             when (outcome) {
-                CopyOutcome.OK -> setStatus(getString(R.string.status_ready), isError = false)
                 CopyOutcome.NO_SPACE -> {
                     currentFile = null
                     releaseSessionDir()
@@ -719,7 +789,7 @@ class MainActivity : AppCompatActivity() {
                     releaseSessionDir()
                     setStatus(getString(R.string.status_source_unavailable), isError = true)
                 }
-                CopyOutcome.FAILED -> {
+                CopyOutcome.FAILED, CopyOutcome.OK -> {
                     currentFile = null
                     releaseSessionDir()
                     setStatus(getString(R.string.status_copy_failed), isError = true)
@@ -755,9 +825,62 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** 回读文件的校验值进度；与复制进度分开，避免 finishedGeneration 把哈希进度丢掉。 */
+    private fun onHashProgress(generation: Long, read: Long, total: Long) {
+        if (total <= 0L || !operations.isCurrent(generation)) return
+        val percent = ((read * 100) / total).toInt().coerceIn(0, 100)
+        if (hashPercent.getAndSet(percent) == percent) return
+        runOnUiThread {
+            if (!operations.isCurrent(generation) || generation == hashFinishedGeneration) {
+                return@runOnUiThread
+            }
+            binding.progress.isIndeterminate = false
+            binding.progress.progress = percent
+            setStatus(getString(R.string.status_hashing_percent, percent), isError = false)
+        }
+    }
+
     /** 旧代际（已被取代/取消）或已经出过最终结果的代际：迟到的进度更新一律丢弃 */
     private fun isStale(generation: Long): Boolean =
         !operations.isCurrent(generation) || generation == finishedGeneration
+
+    private fun showChecksums(value: FileChecksums) {
+        binding.checksumMd5.text = getString(R.string.checksum_md5_format, value.md5)
+        binding.checksumSha1.text = getString(R.string.checksum_sha1_format, value.sha1)
+        binding.checksumSha256.text = getString(R.string.checksum_sha256_format, value.sha256)
+        binding.checksumSection.visibility = View.VISIBLE
+    }
+
+    private fun hideChecksums() {
+        binding.checksumSection.visibility = View.GONE
+        binding.checksumMd5.text = ""
+        binding.checksumSha1.text = ""
+        binding.checksumSha256.text = ""
+    }
+
+    private fun readChecksums(state: Bundle): FileChecksums? {
+        val md5 = state.getString(KEY_MD5)
+        val sha1 = state.getString(KEY_SHA1)
+        val sha256 = state.getString(KEY_SHA256)
+        if (md5 == null || sha1 == null || sha256 == null) return null
+        if (md5.length != 32 || sha1.length != 40 || sha256.length != 64) return null
+        return FileChecksums(md5, sha1, sha256)
+    }
+
+    private fun copyChecksumsToClipboard() {
+        val value = checksums ?: return
+        val text = getString(
+            R.string.checksum_copy_all_format,
+            value.md5,
+            value.sha1,
+            value.sha256,
+        )
+        val clipboard = getSystemService(ClipboardManager::class.java) ?: return
+        clipboard.setPrimaryClip(
+            ClipData.newPlainText(getString(R.string.checksum_title), text),
+        )
+        Toast.makeText(applicationContext, R.string.toast_checksums_copied, Toast.LENGTH_SHORT).show()
+    }
 
     /** 复制结果：只有 [OK] 才允许继续交付 */
     private enum class CopyOutcome { OK, NO_SPACE, TOO_LARGE, SOURCE_UNAVAILABLE, FAILED }
@@ -1651,6 +1774,7 @@ class MainActivity : AppCompatActivity() {
         currentFile = null
         releaseSessionDir()
         copyDone = false
+        checksums = null
         handedOutPaths.clear()
         lockedExt = ""
         savePendingFile = null
@@ -1660,6 +1784,7 @@ class MainActivity : AppCompatActivity() {
         lastPercent.set(-1)
         lastReportedBytes.set(0L)
 
+        hideChecksums()
         binding.oldNameText.text = getString(R.string.old_name_none)
         setInput("")
         binding.allowExtCheck.setOnCheckedChangeListener(null)
@@ -1807,6 +1932,9 @@ class MainActivity : AppCompatActivity() {
         const val KEY_SESSION_DIR = "session_dir"
         const val KEY_CURRENT_FILE = "current_file"
         const val KEY_COPY_DONE = "copy_done"
+        const val KEY_MD5 = "checksum_md5"
+        const val KEY_SHA1 = "checksum_sha1"
+        const val KEY_SHA256 = "checksum_sha256"
         const val KEY_INPUT = "input"
         const val KEY_EXT_LOCKED = "ext_locked"
         const val KEY_LOCKED_EXT = "locked_ext"

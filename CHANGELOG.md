@@ -2,6 +2,25 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)；每个 `v*` tag 会由 GitHub Actions 自动构建并发布 APK。
 
+## [1.5.0] - 2026-10-28
+
+复制完成后显示文件校验值，方便用户自行和源文件对比，验证传输/写盘后内容是否一致。
+
+### Added
+- **MD5 / SHA-1 / SHA-256 展示**：文件复制完成后，在输入框/按钮下方显示三个小写十六进制校验值；支持长按选择，以及“Copy all”一键复制三行。
+- **复制后回读计算**：校验值是对 `cacheDir/shared/<会话>/` 里的最终缓存文件做一次只读回读得到的，而不是边复制边算。这样显示的是真正会被分享/保存的那份文件，写盘阶段若发生损坏也能通过和源文件对比发现。
+- **计算进度**：回读期间复用现有进度条，显示“Calculating checksums… %”；期间禁用发送/保存，避免在拿到校验值前交付。
+- **状态恢复**：MD5/SHA-1/SHA-256 进入 `onSaveInstanceState`，深浅色/字体/语言重建后保留；新分享/重置/缓存失效时清空。
+- **失败可重试**：回读失败显示“Could not calculate checksums. Tap Send to retry.”，不展示半套值，也不会把未完成校验的文件当成 ready。
+
+### Changed
+- **版本号**：`versionName` 1.5.0，`versionCode` 最低 13（可覆盖 v1.4.0 的 12）。
+- **测试**：新增 `FileDigestUtilsTest`（已知向量、空文件、二进制、进度、取消、十六进制填充），JVM 单测增加到 78 条；`MainActivityFlowTest` 增加“校验值展示 + 重建后保留”用例，API 36 模拟器门禁共 8 条 instrumentation。
+
+### Notes
+- 回读是一次额外的完整读盘；大文件期间界面仍可响应，但发送/保存要等校验值完成。
+- MD5/SHA-1 仅用于兼容旧工具和快速对比，完整性/安全性优先看 SHA-256。
+
 ## [1.4.0] - 2026-10-18
 
 构建工具链升级到 AGP 9 / Gradle 9 / Kotlin 2.4，并把 `compileSdk` / `targetSdk` 升到 **36（Android 16）**。这是一个 minor 版本：targetSdk 36 带来强制 edge-to-edge，界面适配是本次的主要功能性改动。

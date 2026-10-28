@@ -11,6 +11,7 @@
     <string name="action_send">Send</string>
     <string name="action_pick">Pick a file</string>
     <string name="action_save">Save to Downloads</string>
+    <string name="action_copy_checksums">Copy all</string>
     <string name="allow_edit_ext">Allow editing the extension</string>
 
     <string name="hint_ext_locked">Extension is locked to %1$s and hidden from the box. Tick the box above to change it.</string>
@@ -23,6 +24,9 @@
     <string name="status_copying_percent">Copying file… %1$d%%</string>
     <string name="status_copying_size">Copying file… %1$s</string>
     <string name="status_ready">Copy finished. Rename it and hit Send.</string>
+    <string name="status_hashing">Copy finished. Calculating checksums…</string>
+    <string name="status_hashing_percent">Calculating checksums… %1$d%%</string>
+    <string name="status_hash_failed">Could not calculate checksums. Tap Send to retry.</string>
     <string name="status_copy_failed">Copy failed. Tap Send to retry.</string>
     <string name="status_storage_low">Not enough free space to copy the file. Free up space, then tap Send to retry.</string>
     <string name="status_too_large">This file is too large to copy into the cache.</string>
@@ -44,5 +48,12 @@
     <string name="toast_sent">Pick a different app to receive the file; don\'t pick %1$s again.</string>
     <string name="toast_saved">Saved to Downloads: %1$s</string>
     <string name="toast_save_failed">Could not save the file.</string>
+    <string name="checksum_title">File checksums</string>
+    <string name="checksum_hint">Compare with the source file. SHA-256 is recommended; MD5/SHA-1 are for compatibility.</string>
+    <string name="checksum_md5_format">MD5\n%1$s</string>
+    <string name="checksum_sha1_format">SHA-1\n%1$s</string>
+    <string name="checksum_sha256_format">SHA-256\n%1$s</string>
+    <string name="checksum_copy_all_format">MD5: %1$s\nSHA-1: %2$s\nSHA-256: %3$s</string>
+    <string name="toast_checksums_copied">Checksums copied.</string>
     <string name="warn_no_loop">After sending, choose a DIFFERENT app in the share sheet to receive the file. Selecting this app again creates an endless loop.</string>
 </resources>

@@ -11,6 +11,7 @@
     <string name="action_send">发送</string>
     <string name="action_pick">选择一个文件</string>
     <string name="action_save">保存到下载</string>
+    <string name="action_copy_checksums">复制全部</string>
     <string name="allow_edit_ext">允许修改扩展名</string>
 
     <string name="hint_ext_locked">扩展名锁定为 %1$s（不显示在输入框里），勾选上面的选项即可修改。</string>
@@ -23,6 +24,9 @@
     <string name="status_copying_percent">正在复制文件… %1$d%%</string>
     <string name="status_copying_size">正在复制文件… %1$s</string>
     <string name="status_ready">复制完成，可以改名后发送了。</string>
+    <string name="status_hashing">复制完成，正在计算校验值…</string>
+    <string name="status_hashing_percent">正在计算校验值… %1$d%%</string>
+    <string name="status_hash_failed">校验值计算失败，点“发送”可重试。</string>
     <string name="status_copy_failed">复制失败，点“发送”可重试。</string>
     <string name="status_storage_low">存储空间不足，无法把文件复制进缓存；清理出空间后点“发送”重试。</string>
     <string name="status_too_large">文件过大，无法复制进缓存。</string>
@@ -43,5 +47,12 @@
     <string name="toast_sent">请选择其它应用接收文件，勿再选「%1$s」。</string>
     <string name="toast_saved">已保存到下载：%1$s</string>
     <string name="toast_save_failed">保存文件失败。</string>
+    <string name="checksum_title">文件校验值</string>
+    <string name="checksum_hint">可与源文件对比。推荐使用 SHA-256；MD5/SHA-1 仅用于兼容旧工具。</string>
+    <string name="checksum_md5_format">MD5\n%1$s</string>
+    <string name="checksum_sha1_format">SHA-1\n%1$s</string>
+    <string name="checksum_sha256_format">SHA-256\n%1$s</string>
+    <string name="checksum_copy_all_format">MD5：%1$s\nSHA-1：%2$s\nSHA-256：%3$s</string>
+    <string name="toast_checksums_copied">校验值已复制。</string>
     <string name="warn_no_loop">点“发送”后，请在系统分享面板里选择其它应用接收文件；请勿再次选择本应用，否则文件会被反复转手、无限循环。</string>
 </resources>
