@@ -25,7 +25,6 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.hamcrest.CoreMatchers.not
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -155,7 +154,7 @@ class MainActivityFlowTest {
                     "default text name should be YYYYMMDD_hhmmss, was ${input.text}",
                     input.text.toString().matches(Regex("\\d{8}_\\d{6}")),
                 )
-                assertFalse(activity.findViewById<Button>(R.id.sendButton).isEnabled)
+                assertTrue(activity.findViewById<Button>(R.id.sendButton).isEnabled)
                 assertTrue(activity.findViewById<Button>(R.id.saveButton).isEnabled)
                 val oldName = activity.findViewById<TextView>(R.id.oldNameText).text.toString()
                 assertTrue("shared text preview missing", oldName.contains("just text"))
@@ -179,7 +178,7 @@ class MainActivityFlowTest {
             scenario.recreate()
 
             onView(withId(R.id.nameInput)).check(matches(withText("text-name")))
-            onView(withId(R.id.sendButton)).check(matches(not(isEnabled())))
+            onView(withId(R.id.sendButton)).check(matches(isEnabled()))
             onView(withId(R.id.saveButton)).check(matches(isEnabled()))
         }
     }
@@ -230,7 +229,8 @@ class MainActivityFlowTest {
     @Test
     fun textShare_savesSharedTextAsTxt() {
         val unique = "text-${System.nanoTime()}"
-        val body = "text payload ${System.nanoTime()}"
+        // 保留 CRLF / CR / LF 原样，且不能有 UTF-8 BOM。
+        val body = "line1\r\nline2\rline3\nline4"
         val intent = Intent(context, MainActivity::class.java).apply {
             action = Intent.ACTION_SEND
             type = "text/plain"
@@ -238,7 +238,7 @@ class MainActivityFlowTest {
         }
         ActivityScenario.launch<MainActivity>(intent).use { scenario ->
             waitUntilSaveEnabled(scenario)
-            onView(withId(R.id.sendButton)).check(matches(not(isEnabled())))
+            onView(withId(R.id.sendButton)).check(matches(isEnabled()))
             onView(withId(R.id.nameInput)).perform(replaceText(unique), closeSoftKeyboard())
             onView(withId(R.id.saveButton)).perform(click())
 
@@ -246,10 +246,17 @@ class MainActivityFlowTest {
             val saved = awaitSavedFiles(mapOf(name to body))
             try {
                 val uri = saved.getValue(name)
-                val actual = context.contentResolver.openInputStream(uri)?.use { input ->
-                    input.readBytes().toString(StandardCharsets.UTF_8)
-                }
-                assertEquals(body, actual)
+                val bytes = context.contentResolver.openInputStream(uri)?.use { input ->
+                    input.readBytes()
+                } ?: throw AssertionError("saved text missing")
+                assertEquals(body, bytes.toString(StandardCharsets.UTF_8))
+                assertTrue(
+                    "text file must not start with a UTF-8 BOM",
+                    !(bytes.size >= 3 &&
+                        bytes[0] == 0xEF.toByte() &&
+                        bytes[1] == 0xBB.toByte() &&
+                        bytes[2] == 0xBF.toByte()),
+                )
             } finally {
                 saved.values.forEach { uri ->
                     runCatching { context.contentResolver.delete(uri, null, null) }
@@ -284,6 +291,49 @@ class MainActivityFlowTest {
                     input.readBytes().toString(StandardCharsets.UTF_8)
                 }
                 assertEquals(url, actual)
+            } finally {
+                saved.values.forEach { uri ->
+                    runCatching { context.contentResolver.delete(uri, null, null) }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun unknownShare_fallsBackToRawTxt_andKeepsSendEnabled() {
+        val unique = "unknown-${System.nanoTime()}"
+        val intent = Intent(context, MainActivity::class.java).apply {
+            action = Intent.ACTION_SEND
+            type = "application/x-hellorename-unknown"
+            putExtra("mystery", "value-${System.nanoTime()}")
+        }
+        ActivityScenario.launch<MainActivity>(intent).use { scenario ->
+            waitUntilSaveEnabled(scenario)
+            onView(withId(R.id.sendButton)).check(matches(isEnabled()))
+            scenario.onActivity { activity ->
+                val input = activity.findViewById<EditText>(R.id.nameInput)
+                assertTrue(
+                    "unknown fallback should get a timestamp name, was ${input.text}",
+                    input.text.toString().matches(Regex("\d{8}_\d{6}")),
+                )
+                val preview = activity.findViewById<TextView>(R.id.oldNameText).text.toString()
+                assertTrue("raw intent dump missing", preview.contains("Unrecognized share request"))
+                assertTrue("unknown MIME missing from dump", preview.contains("application/x-hellorename-unknown"))
+            }
+
+            onView(withId(R.id.nameInput)).perform(replaceText(unique), closeSoftKeyboard())
+            onView(withId(R.id.saveButton)).perform(click())
+
+            val name = "$unique.txt"
+            val saved = awaitSavedFiles(mapOf(name to ""))
+            try {
+                val uri = saved.getValue(name)
+                val text = context.contentResolver.openInputStream(uri)?.use { input ->
+                    input.readBytes().toString(StandardCharsets.UTF_8)
+                }
+                assertTrue("raw action missing", text.contains("action: android.intent.action.SEND"))
+                assertTrue("raw MIME missing", text.contains("application/x-hellorename-unknown"))
+                assertTrue("raw extra missing", text.contains("mystery"))
             } finally {
                 saved.values.forEach { uri ->
                     runCatching { context.contentResolver.delete(uri, null, null) }
