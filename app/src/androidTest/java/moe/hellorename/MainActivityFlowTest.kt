@@ -4,6 +4,7 @@ import android.content.ContentUris
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.view.View
 import android.widget.Button
@@ -230,6 +231,63 @@ class MainActivityFlowTest {
                 }
             }
         }
+    }
+
+    @Test
+    fun folderShare_preservesNestedStructure() {
+        val authority = "${context.packageName}.testfolder"
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
+        val intent = Intent(context, MainActivity::class.java).apply {
+            action = Intent.ACTION_SEND
+            type = DocumentsContract.Document.MIME_TYPE_DIR
+            putExtra(Intent.EXTRA_STREAM, tree)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        ActivityScenario.launch<MainActivity>(intent).use { scenario ->
+            waitUntilSaveEnabled(scenario)
+            onView(withId(R.id.nameInput)).check(matches(not(isEnabled())))
+            onView(withId(R.id.sendButton)).check(matches(not(isEnabled())))
+            scenario.onActivity { activity ->
+                val listed = activity.findViewById<TextView>(R.id.oldNameText).text.toString()
+                assertTrue("root file missing: $listed", listed.contains("share-root/a.txt"))
+                assertTrue("nested file missing: $listed", listed.contains("share-root/sub/b.txt"))
+            }
+
+            onView(withId(R.id.saveButton)).perform(scrollTo(), click())
+
+            val expected = mapOf("a.txt" to "folder-a", "b.txt" to "folder-b")
+            val saved = awaitSavedFiles(expected)
+            try {
+                saved.forEach { (name, uri) ->
+                    val actual = context.contentResolver.openInputStream(uri)?.use { input ->
+                        input.readBytes().toString(StandardCharsets.UTF_8)
+                    }
+                    assertEquals(expected[name], actual)
+                    val relative = relativePathOf(uri)
+                    if (name == "a.txt") {
+                        assertTrue("wrong root path: $relative", relative.contains("share-root"))
+                    } else {
+                        assertTrue("wrong nested path: $relative", relative.contains("share-root/sub"))
+                    }
+                }
+            } finally {
+                saved.values.forEach { uri ->
+                    runCatching { context.contentResolver.delete(uri, null, null) }
+                }
+            }
+        }
+    }
+
+    private fun relativePathOf(uri: Uri): String {
+        return context.contentResolver.query(
+            uri,
+            arrayOf(MediaStore.MediaColumns.RELATIVE_PATH),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0).orEmpty() else ""
+        }.orEmpty()
     }
 
     @Test

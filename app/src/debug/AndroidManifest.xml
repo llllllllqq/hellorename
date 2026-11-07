@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        仅 debug / instrumentation 使用的测试 DocumentsProvider。
+        用来在 API 36 模拟器上验证“分享文件夹 → 保留目录结构保存”的路径；
+        release APK 不包含这个 provider。
+    -->
+    <application>
+        <provider
+            android:name=".TestFolderProvider"
+            android:authorities="${applicationId}.testfolder"
+            android:exported="true"
+            android:grantUriPermissions="true" />
+    </application>
+
+</manifest>
