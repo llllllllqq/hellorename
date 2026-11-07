@@ -35,7 +35,7 @@
   只对该条命令生效，不要 `export HOME`。
 - `gh` 通常可直接用；若遇到 `~/.cache` 只读：`XDG_CACHE_HOME=$PWD/.tooling/gh-cache gh ...`。
 - **不在本地跑 Gradle**：不在本机下载 Gradle/依赖、不本地产包。构建、测试、发布全部走 GitHub Actions。
-- 读文件用 `read` / `grep` / `glob`，不要 `cat` / `find` / `rg`；删除、移动前先确认绝对路径。
+- 读文件和搜索优先用 agent 运行时的 `read` / `grep` / `glob` 工具（输出带行号、按文件分组、超长会落盘、遵守忽略规则）；这只是运行时约定，**不是仓库限制**——`rg`（15.2.0）、`find`、`cat` 本机都可用，人类或其他 agent 随便用。删除、移动文件前先确认绝对路径。
 
 ## 4. 查 Android 官方文档（本项目的规定动作）
 
