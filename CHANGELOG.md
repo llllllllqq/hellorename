@@ -2,6 +2,11 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)；每个 `v*` tag 会由 GitHub Actions 自动构建并发布 APK。
 
+## [Unreleased]
+
+### Fixed
+- **保存 `.ini` 等非标准扩展名时被追加 `.txt`**：当分享方把文件报成 `text/plain`、而 Android 的 MIME 表里 `text/plain` 只对应 `txt` 时，MediaStore 会把 `desktop.ini` 保存成 `desktop.ini.txt`。保存时若源 MIME 的规范扩展名与当前扩展名冲突，改用扩展名推断的 MIME（推断不到则 `application/octet-stream`），单文件和多文件共用该规则，保留原扩展名。
+
 ## [1.6.0] - 2026-11-07
 
 扩展分享入口：多文件可以一起保存；纯文本和无法作为文件读取的链接不再直接拒绝，而是落成可改名的 `.txt` 文件。

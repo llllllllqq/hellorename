@@ -605,8 +605,8 @@ class MainActivity : AppCompatActivity() {
             if (!isActive || !operations.isCurrent(generation) || mode != ShareMode.MULTI) return@launch
             loadingMeta = false
             multiNames = metas.mapIndexed { index, meta -> multiDisplayName(meta, index) }
-            multiMimes = metas.mapIndexed { index, meta ->
-                meta.mime ?: mimeForExtension(FileNameUtils.split(meta.name).ext)
+            multiMimes = metas.map { meta ->
+                mimeForSaving(FileNameUtils.split(meta.name).ext, meta.mime)
             }
             copyDone = multiUris.isNotEmpty() && multiNames.size == multiUris.size
             binding.oldNameText.text = buildMultiList()
@@ -1872,22 +1872,47 @@ class MainActivity : AppCompatActivity() {
         return parts.base to parts.ext
     }
 
-    private fun mimeForExtension(ext: String): String {
+    private fun mimeFromExtension(ext: String): String? {
         val key = FileNameUtils.extensionKey(ext)
-        if (key.isEmpty()) return FALLBACK_MIME
+        if (key.isEmpty()) return null
         return try {
-            MimeTypeMap.getSingleton().getMimeTypeFromExtension(key) ?: FALLBACK_MIME
+            MimeTypeMap.getSingleton().getMimeTypeFromExtension(key)
         } catch (_: Throwable) {
-            FALLBACK_MIME
+            null
         }
     }
 
+    private fun mimeForExtension(ext: String): String =
+        mimeFromExtension(ext) ?: FALLBACK_MIME
+
+    /**
+     * 保存时用的 MIME：源 MIME 的规范扩展名和当前扩展名冲突时改用扩展名推断的 MIME，
+     * 避免 MediaStore 把 `desktop.ini` 保存成 `desktop.ini.txt`（text/plain → txt）。
+     */
+    private fun mimeForSaving(ext: String, source: String?): String {
+        val canonical = try {
+            source
+                ?.substringBefore(';')
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { MimeTypeMap.getSingleton().getExtensionFromMimeType(it) }
+        } catch (_: Throwable) {
+            null
+        }
+        return FileNameUtils.chooseSaveMime(
+            ext = ext,
+            sourceMime = source,
+            canonicalExt = canonical,
+            extMime = mimeFromExtension(ext),
+            fallback = FALLBACK_MIME,
+        )
+    }
+
     private fun resolveMime(ext: String): String {
-        val fromExt = mimeForExtension(ext)
         return if (ext.equals(originalExt, ignoreCase = true)) {
-            sourceMime ?: fromExt
+            mimeForSaving(ext, sourceMime)
         } else {
-            fromExt
+            mimeForExtension(ext)
         }
     }
 

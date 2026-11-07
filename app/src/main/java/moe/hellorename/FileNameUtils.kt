@@ -108,6 +108,40 @@ object FileNameUtils {
     }
 
     /**
+     * 选择保存时对外声明的 MIME。
+     *
+     * MediaStore 会按 MIME 的“规范扩展名”校正文件名：例如 MIME 是 `text/plain`、
+     * 文件名是 `desktop.ini` 时，因为 Android 的 MIME 表里 `text/plain` 只对应 `txt`，
+     * 系统会把它保存成 `desktop.ini.txt`。
+     *
+     * 因此当源 MIME 的规范扩展名和当前扩展名冲突时，改用扩展名推断的 MIME；
+     * 推断不到就用 [fallback]，避免系统擅自追加后缀。规范扩展名为空（MIME 表里
+     * 没有登记）或与当前扩展名一致时，保留源 MIME。
+     *
+     * @param canonicalExt 源 MIME 对应的规范扩展名（不含点），未知时传 null
+     * @param extMime 当前扩展名对应的 MIME，未知时传 null
+     */
+    fun chooseSaveMime(
+        ext: String,
+        sourceMime: String?,
+        canonicalExt: String?,
+        extMime: String?,
+        fallback: String = "application/octet-stream",
+    ): String {
+        val key = extensionKey(ext)
+        val source = sourceMime?.substringBefore(';')?.trim()?.takeIf { it.isNotEmpty() }
+        if (source == null) return extMime ?: fallback
+        if (key.isEmpty()) return source
+        val canonical = canonicalExt
+            ?.trim()
+            ?.removePrefix(".")
+            ?.lowercase(Locale.US)
+            ?.takeIf { it.isNotEmpty() }
+        if (canonical == null || canonical == key) return source
+        return extMime ?: fallback
+    }
+
+    /**
      * 按 UTF-8 字节数截断，并且**绝不劈开一个多字节字符**。
      * 直接 `toByteArray().copyOf(n)` 会把汉字/emoji 截成半个字符（变成 U+FFFD）。
      */

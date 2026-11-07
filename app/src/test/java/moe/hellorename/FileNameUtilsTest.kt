@@ -267,6 +267,58 @@ class FileNameUtilsTest {
         )
     }
 
+    // ---------- chooseSaveMime ----------
+
+    @Test
+    fun `saveMime keeps source when canonical extension matches`() {
+        assertEquals(
+            "text/plain",
+            FileNameUtils.chooseSaveMime(".txt", "text/plain", "txt", "text/plain"),
+        )
+    }
+
+    @Test
+    fun `saveMime replaces text plain for ini`() {
+        // Android 的 MIME 表只有 text/plain -> txt；.ini 没有映射。
+        // 若继续用 text/plain，MediaStore 会把 desktop.ini 存成 desktop.ini.txt。
+        assertEquals(
+            "application/octet-stream",
+            FileNameUtils.chooseSaveMime(".ini", "text/plain", "txt", null),
+        )
+    }
+
+    @Test
+    fun `saveMime uses extension MIME when provider MIME is wrong`() {
+        assertEquals(
+            "image/png",
+            FileNameUtils.chooseSaveMime(".png", "image/jpeg", "jpg", "image/png"),
+        )
+    }
+
+    @Test
+    fun `saveMime keeps provider MIME without canonical extension`() {
+        assertEquals(
+            "text/markdown",
+            FileNameUtils.chooseSaveMime(".md", "text/markdown", null, null),
+        )
+    }
+
+    @Test
+    fun `saveMime falls back when neither source nor extension knows the type`() {
+        assertEquals(
+            "application/octet-stream",
+            FileNameUtils.chooseSaveMime(".ini", null, null, null),
+        )
+    }
+
+    @Test
+    fun `saveMime strips mime parameters before matching`() {
+        assertEquals(
+            "text/plain",
+            FileNameUtils.chooseSaveMime(".txt", "text/plain; charset=utf-8", "txt", "text/plain"),
+        )
+    }
+
     // ---------- extensionKey ----------
 
     @Test

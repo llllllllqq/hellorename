@@ -149,7 +149,7 @@ gradle assembleRelease                               # 或 ./gradlew assembleRel
 环境：JDK 17、Gradle 9.6.0、AGP 9.4.1、Kotlin 2.4.21、compileSdk 36、targetSdk 36、minSdk 24。单元测试：
 
 ```bash
-gradle test                    # 79 条 JVM 单测（文件名/缓存/流复制/操作代际/校验值/时间戳）
+gradle test                    # 85 条 JVM 单测（文件名/缓存/流复制/操作代际/校验值/时间戳）
 gradle connectedDebugAndroidTest   # 需要模拟器或真机；API 36 门禁
 ```
 
