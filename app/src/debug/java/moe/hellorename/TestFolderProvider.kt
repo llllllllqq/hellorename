@@ -85,6 +85,9 @@ class TestFolderProvider : DocumentsProvider() {
 
     override fun getDocumentType(documentId: String): String = mimeFor(documentId)
 
+    override fun isChildDocument(parentDocumentId: String, documentId: String): Boolean =
+        documentId.startsWith(parentDocumentId + "/")
+
     private fun addDocumentRow(cursor: MatrixCursor, id: String) {
         val row = cursor.newRow()
         put(row, Document.COLUMN_DOCUMENT_ID, id)
