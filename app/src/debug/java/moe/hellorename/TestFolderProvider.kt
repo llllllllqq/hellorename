@@ -2,7 +2,6 @@ package moe.hellorename
 
 import android.database.Cursor
 import android.database.MatrixCursor
-import android.net.Uri
 import android.os.CancellationSignal
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
@@ -84,18 +83,7 @@ class TestFolderProvider : DocumentsProvider() {
         return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
     }
 
-    override fun getType(uri: Uri): String? {
-        val id = try {
-            DocumentsContract.getDocumentId(uri)
-        } catch (_: Throwable) {
-            try {
-                DocumentsContract.getTreeDocumentId(uri)
-            } catch (_: Throwable) {
-                return null
-            }
-        }
-        return mimeFor(id)
-    }
+    override fun getDocumentType(documentId: String): String = mimeFor(documentId)
 
     private fun addDocumentRow(cursor: MatrixCursor, id: String) {
         val row = cursor.newRow()
