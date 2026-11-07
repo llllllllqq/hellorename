@@ -478,15 +478,17 @@ class MainActivityFlowTest {
 
     private fun waitUntilSaveEnabled(scenario: ActivityScenario<MainActivity>) {
         val deadline = System.currentTimeMillis() + 20_000L
+        var status = ""
         while (System.currentTimeMillis() < deadline) {
             var enabled = false
             scenario.onActivity { activity ->
                 enabled = activity.findViewById<Button>(R.id.saveButton).isEnabled
+                status = activity.findViewById<TextView>(R.id.statusText).text.toString()
             }
             if (enabled) return
             Thread.sleep(100L)
         }
-        throw AssertionError("save did not become available within 20s")
+        throw AssertionError("save did not become available within 20s; status=$status")
     }
 
     /** 轮询 MediaStore，直到所有预期 DISPLAY_NAME 都出现；返回 name -> content Uri */

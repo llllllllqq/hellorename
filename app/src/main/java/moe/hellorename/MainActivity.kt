@@ -662,7 +662,8 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val entries = try {
                 withContext(Dispatchers.IO) { expandMultiEntries(roots) }
-            } catch (_: Throwable) {
+            } catch (error: Throwable) {
+                Log.w(TAG, "folder expansion failed", error)
                 null
             }
             if (!isActive || !operations.isCurrent(generation) || mode != ShareMode.MULTI) return@launch
