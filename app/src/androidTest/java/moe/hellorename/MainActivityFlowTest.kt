@@ -314,7 +314,7 @@ class MainActivityFlowTest {
                 val input = activity.findViewById<EditText>(R.id.nameInput)
                 assertTrue(
                     "unknown fallback should get a timestamp name, was ${input.text}",
-                    input.text.toString().matches(Regex("\d{8}_\d{6}")),
+                    input.text.toString().matches(Regex("\\d{8}_\\d{6}")),
                 )
                 val preview = activity.findViewById<TextView>(R.id.oldNameText).text.toString()
                 assertTrue("raw intent dump missing", preview.contains("Unrecognized share request"))
@@ -330,7 +330,7 @@ class MainActivityFlowTest {
                 val uri = saved.getValue(name)
                 val text = context.contentResolver.openInputStream(uri)?.use { input ->
                     input.readBytes().toString(StandardCharsets.UTF_8)
-                }
+                } ?: throw AssertionError("saved raw text missing")
                 assertTrue("raw action missing", text.contains("action: android.intent.action.SEND"))
                 assertTrue("raw MIME missing", text.contains("application/x-hellorename-unknown"))
                 assertTrue("raw extra missing", text.contains("mystery"))
