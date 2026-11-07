@@ -79,7 +79,7 @@ HOME=$PWD/.android-user android docs fetch \
   gh run view <run-id> --log | grep -E "构建版本|versionCode|PASS|FAIL"
   ```
 
-- 测试计数：JVM **85** 条、API 36 instrumentation **14** 条。增删测试后同步 README 与 CHANGELOG 里的数字。
+- 测试计数：JVM **88** 条、API 36 instrumentation **15** 条。增删测试后同步 README 与 CHANGELOG 里的数字。
 - **同 UID 陷阱**：`app/src/debug` 的 `TestFolderProvider` 和被测 App 同 UID，`ContentProvider.enforceReadPermissionInner()` 对同 UID 直接放行。所以 instrumentation 绿**不代表**跨应用 URI 授权在真机成立（文件夹分享就是这样：跨应用只给单 URI 授权时必然失败）。涉及跨应用授权的行为，必须真机取证后再下结论。
 - `qa_check.py` 的期望值：包名、versionName、`minSdk 24`、`targetSdk 36`、`MainActivity` exported + 三个 action、`FileProvider` 配置、v2/v3 签名、证书 SHA-256、无残留密钥文件。
 

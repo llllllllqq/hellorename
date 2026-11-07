@@ -31,6 +31,7 @@ HelloRename 就是干这件事的：
 12. **多文件分享**：不再只处理第一个；改名框和“发送”自动禁用，只能一起保存到下载目录（Android 10+ 逐个写 MediaStore，Android 7–9 选目录后逐个创建文档）。**文件夹不展开**：跨应用分享只授予目录本身、拿不到子项，强行递归在真机上必然失败；现在把文件夹的 URI/路径当作纯文本处理。
 13. **纯文本 / 不支持的链接分享**：默认文件名是本地时区的 `YYYYMMDD_hhmmss`（精确到秒），可改名；保存为 **UTF-8、无 BOM** 的 `.txt`，原有 CRLF/CR/LF 不改写。“发送”不生成文件，而是把来源 Intent 原样转发到系统分享面板。
 14. **未知请求兜底**：既没有可读文件、也没有可识别文本的分享/未知调用，会把原始 Intent 转储成 `.txt`（`Intent.toUri(URI_INTENT_SCHEME)`，并附 action/type/data/extras 摘要）；“发送”同样原样转发来源请求。
+15. **手动清空缓存**：标题栏右上角的垃圾桶按钮会二次确认后强制清空 `cacheDir/shared/` 与 `cacheDir/shared-state/`，只保留当前正在使用的会话；清理在 IO 线程执行，完成后 Toast 报告释放的字节数。
 
 ## 设计取舍（为什么这么实现）
 
@@ -80,6 +81,7 @@ HelloRename 就是干这件事的：
 - 分享的是文件夹：不再递归读取，直接把它的 URI/路径放进文本模式（可改名、可存成 `.txt`、可原样转发）；多选里混着文件夹时跳过文件夹并提示数量。
 - 纯文本或 `http(s)` 等非文件链接：保存为 UTF-8 `.txt`，不会去下载链接内容；默认名是分享时刻的 `YYYYMMDD_hhmmss`；点“发送”会原样转发来源分享。
 - 无法识别的分享：保存原始 Intent 转储；点“发送”转发来源请求。
+- 标题栏右上角的垃圾桶：二次确认后强制清空 `shared/` 与 `shared-state/`，只保留当前正在使用的会话；完成后提示释放的字节数。
 
 ## 构建
 
@@ -93,7 +95,7 @@ HelloRename 就是干这件事的：
 `.github/workflows/emulator-ui.yml` 在 GitHub Actions 的 API 36 模拟器上执行 `connectedDebugAndroidTest`：
 
 - **主题门禁**：系统 ActionBar 必须关闭，全屏只有一个应用名标题（防止出现 v1.3.0 那样上下两个标题）；顶栏高度恰好 **56dp**，Android 15+ 强制 edge-to-edge 时由根布局让出状态栏/导航栏/IME inset；浅色模式白底黑字、深色模式黑底白字。
-- **主流程门禁**（v1.3.2 起，v1.5.0 增加校验值）：分享文件 → 等待复制和校验值计算 → 输入新名字 → `ActivityScenario.recreate()` 后输入/旧文件名/复制状态/MD5/SHA-1/SHA-256 仍在；`ACTION_MAIN` 重进不清空；异常 `EXTRA_STREAM` 不崩溃；`Parcelable[]` 形式仍能识别。
+- **主流程门禁**（v1.3.2 起，v1.5.0 增加校验值，v2.2.0 增加清空缓存）：分享文件 → 等待复制和校验值计算 → 输入新名字 → `ActivityScenario.recreate()` 后输入/旧文件名/复制状态/MD5/SHA-1/SHA-256 仍在；`ACTION_MAIN` 重进不清空；异常 `EXTRA_STREAM` 不崩溃；`Parcelable[]` 形式仍能识别。
 
 Release workflow 的 `release` job 通过 `needs: emulator-verify` 依赖这项验证；模拟器不通过就不会构建发布包，更不会创建 Release。测试结束后会上传测试报告、浅色 / 深色截图与 UI 层级作为 Actions artifact，方便人工复核。
 
@@ -152,7 +154,7 @@ gradle assembleRelease                               # 或 ./gradlew assembleRel
 环境：JDK 17、Gradle 9.6.0、AGP 9.4.1、Kotlin 2.4.21、compileSdk 36、targetSdk 36、minSdk 24。单元测试：
 
 ```bash
-gradle test                    # 85 条 JVM 单测（文件名/缓存/流复制/操作代际/校验值/时间戳）
+gradle test                    # 88 条 JVM 单测（文件名/缓存/流复制/操作代际/校验值/时间戳）
 gradle connectedDebugAndroidTest   # 需要模拟器或真机；API 36 门禁
 ```
 
@@ -174,6 +176,7 @@ gradle connectedDebugAndroidTest   # 需要模拟器或真机；API 36 门禁
 - 文案默认英文，中文放在 `values-zh`（所有中文语系都会命中）。
 - 校验值是在复制完成后对缓存文件做一次完整回读计算的，因此大文件会额外花一次读盘时间；计算期间发送/保存按钮保持禁用并显示进度。
 - 分享面板弹出后你没法知道对方何时读完文件，所以临时文件已交付的按交付时刻保温 24 小时；未交付的在离开界面 30 分钟后按 10 分钟 TTL 回收。
+- 手动“清空缓存”会覆盖上面两条保温规则：除当前会话外全部删除，可能让其他应用正在读取的旧分享失效（确认框里有提示）。
 - SAF 保存路径只在 Android 7–9 使用；多文件在该区间改用目录选择器（`ACTION_OPEN_DOCUMENT_TREE`），在选中的目录里逐个创建文档。API 36 模拟器门禁覆盖 MediaStore 的单文件、多文件、文本、未知兜底和“文件夹转纯文本”；`wt` 回退、截断、取消清理和 API 28 的 SAF 写入仍靠代码审查 + 人工验证。
 
 ## License

@@ -16,7 +16,24 @@
         android:layout_height="@dimen/top_bar_height"
         android:background="?android:attr/colorBackground"
         app:title="@string/app_name"
-        app:titleTextColor="?attr/colorOnSurface" />
+        app:titleTextColor="?attr/colorOnSurface">
+
+        <!--
+            右上角“清空缓存”：除当前正在使用的会话外，强制删掉 shared/ 与 shared-state/ 里的所有内容。
+            48dp 触摸区 + 无界 ripple；图标颜色跟随 ?attr/colorOnSurface，深浅色都不用单独写一套。
+        -->
+        <ImageButton
+            android:id="@+id/clearCacheButton"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="end|center_vertical"
+            android:layout_marginEnd="4dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/action_clear_cache"
+            android:scaleType="centerInside"
+            android:src="@drawable/ic_delete"
+            android:tint="?attr/colorOnSurface" />
+    </androidx.appcompat.widget.Toolbar>
 
     <ScrollView
         android:layout_width="match_parent"

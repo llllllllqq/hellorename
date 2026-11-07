@@ -258,6 +258,57 @@ class CacheCleanerTest {
         )
     }
 
+    // ---------- 手动“清空缓存”：忽略 TTL，只保留活会话 ----------
+
+    @Test
+    fun `force clear keeps the live session and removes everything else`() {
+        val live = session("live-session", dirMtime = now)
+        CacheState.register(live)
+        assertTrue(CacheStore.markDelivered(state, "live-session", now))
+        val old = session("old-session", dirMtime = now - 2 * 24 * 60 * 60 * 1000L)
+        assertTrue(CacheStore.markDelivered(state, "old-session", now))
+
+        val report = CacheStore.deleteAllExceptLive(shared, state, CacheState.livePaths())
+
+        assertEquals(1, report.deleted)
+        assertEquals(1, report.keptLive)
+        assertEquals(0, report.failed)
+        assertTrue("活会话必须保留", live.exists())
+        assertNotNull("活会话的交付标记必须保留", CacheStore.deliveredAt(state, "live-session"))
+        assertFalse("其它会话即使刚交付也要删", old.exists())
+        assertNull("被删会话的标记必须清掉", CacheStore.deliveredAt(state, "old-session"))
+        assertTrue("释放字节数应大于 0", report.freedBytes > 0)
+    }
+
+    @Test
+    fun `force clear removes orphan markers and temp files`() {
+        val kept = session("kept", dirMtime = now)
+        CacheState.register(kept)
+        assertTrue(CacheStore.markDelivered(state, "kept", now))
+        assertTrue(CacheStore.markDelivered(state, "gone-session", now))
+        val temp = File(state, ".half-written.tmp").apply { writeText("1") }
+
+        CacheStore.deleteAllExceptLive(shared, state, CacheState.livePaths())
+
+        assertNotNull("活会话的标记必须保留", CacheStore.deliveredAt(state, "kept"))
+        assertNull("没有对应目录的标记已经是孤儿", CacheStore.deliveredAt(state, "gone-session"))
+        assertFalse(temp.exists())
+    }
+
+    @Test
+    fun `force clear does not prune markers when the shared listing fails`() {
+        assertTrue(CacheStore.markDelivered(state, "kept", now))
+        val notADirectory = File(tmp.root, "not-a-directory").apply { writeText("x") }
+
+        val report = CacheStore.deleteAllExceptLive(notADirectory, state, emptySet())
+
+        assertEquals(0, report.deleted)
+        assertNotNull(
+            "读不到目录内容时不能把交付标记当成孤儿",
+            CacheStore.deliveredAt(state, "kept"),
+        )
+    }
+
     @Test
     fun `cleanup does not prune markers when the shared listing fails`() {
         assertTrue(state.mkdirs() || state.isDirectory)

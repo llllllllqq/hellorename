@@ -33,6 +33,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.color.MaterialColors
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -160,6 +161,9 @@ class MainActivity : AppCompatActivity() {
 
     /** 保存操作进行中（用于重建后提示“上次保存被中断”） */
     private var wasSaving = false
+
+    /** 手动清空缓存进行中：防止连点弹出多个确认框/并发清理 */
+    private var cacheClearing = false
 
     /** null = 扩展名可编辑；非 null = 扩展名锁定为该值（可能是空串） */
     private var lockedExt: String? = null
@@ -305,6 +309,7 @@ class MainActivity : AppCompatActivity() {
         applyEdgeToEdge()
 
         binding.sendButton.setOnClickListener { onSendClicked() }
+        binding.clearCacheButton.setOnClickListener { confirmClearCache() }
         binding.saveButton.setOnClickListener { onSaveClicked() }
         binding.pickButton.setOnClickListener { pickFile.launch(arrayOf("*/*")) }
         binding.allowExtCheck.setOnCheckedChangeListener { _, isChecked -> applyExtLock(!isChecked) }
@@ -2869,6 +2874,60 @@ class MainActivity : AppCompatActivity() {
         } else {
             String.format(Locale.US, "%.1f MB", mb)
         }
+    }
+
+    // ---------------------------------------------------------------- 手动清空缓存
+
+    /**
+     * 右上角垃圾桶：确认后强制清空 `shared/` 与 `shared-state/`，只保留当前界面正在用的会话。
+     *
+     * 不做节流、不看 TTL——这是用户显式要求“现在清掉”，和后台自动清理是两条独立的路径。
+     * 需要确认框的原因：删掉已交付会话的缓存/标记，可能让别的应用正在读取的旧分享失效。
+     */
+    private fun confirmClearCache() {
+        if (cacheClearing) return
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.clear_cache_title)
+            .setMessage(R.string.clear_cache_message)
+            .setNegativeButton(R.string.clear_cache_cancel, null)
+            .setPositiveButton(R.string.clear_cache_confirm) { _, _ -> clearCacheExceptCurrent() }
+            .show()
+    }
+
+    private fun clearCacheExceptCurrent() {
+        if (cacheClearing) return
+        cacheClearing = true
+        val sharedRoot = File(cacheDir, CacheStore.SHARED_DIR)
+        val stateRoot = File(cacheDir, CacheStore.STATE_DIR)
+        // livePaths 只覆盖“已登记”的会话；sessionDir/currentFile 兜住刚分配、还没登记的那一瞬间
+        val protected = buildSet {
+            addAll(CacheState.livePaths())
+            sessionDir?.let { add(it.absolutePath) }
+            currentFile?.parentFile?.let { add(it.absolutePath) }
+            savePendingFile?.parentFile?.let { add(it.absolutePath) }
+        }
+        lifecycleScope.launch {
+            val report = withContext(Dispatchers.IO) {
+                CacheStore.deleteAllExceptLive(sharedRoot, stateRoot, protected)
+            }
+            cacheClearing = false
+            if (isFinishing || isDestroyed) return@launch
+            val message = if (report.deleted == 0) {
+                getString(R.string.toast_cache_empty)
+            } else {
+                getString(R.string.toast_cache_cleared, formatCacheSize(report.freedBytes))
+            }
+            Toast.makeText(applicationContext, message, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /** 清空缓存的提示用：B/KB/MB/GB 都要能看，不能一律折成 0.00 MB */
+    private fun formatCacheSize(bytes: Long): String = when {
+        bytes < 1024L -> "$bytes B"
+        bytes < 1024L * 1024L -> String.format(Locale.US, "%.1f KB", bytes / 1024.0)
+        bytes < 1024L * 1024L * 1024L ->
+            String.format(Locale.US, "%.2f MB", bytes / 1024.0 / 1024.0)
+        else -> String.format(Locale.US, "%.2f GB", bytes / 1024.0 / 1024.0 / 1024.0)
     }
 
     private fun showEmptyState() {

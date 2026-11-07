@@ -84,6 +84,13 @@
         <item quantity="other">Saved %1$d files to Downloads.</item>
     </plurals>
     <string name="toast_save_failed">Could not save the file.</string>
+    <string name="action_clear_cache">Clear cache</string>
+    <string name="clear_cache_title">Clear cached files?</string>
+    <string name="clear_cache_message">Deletes every cached copy and delivery record except the file currently in use. Shares other apps are still reading may break.</string>
+    <string name="clear_cache_confirm">Clear</string>
+    <string name="clear_cache_cancel">Cancel</string>
+    <string name="toast_cache_cleared">Cache cleared: %1$s freed</string>
+    <string name="toast_cache_empty">No cached files to clear</string>
     <string name="checksum_title">File checksums</string>
     <string name="checksum_hint">Compare with the source file. SHA-256 is recommended; MD5/SHA-1 are for compatibility.</string>
     <string name="checksum_md5_format">MD5\n%1$s</string>

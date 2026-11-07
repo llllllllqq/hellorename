@@ -118,6 +118,52 @@ object CacheStore {
         return Report(deleted, freed, keptLive, keptFresh, failed)
     }
 
+    /**
+     * 用户手动“清空缓存”：忽略 TTL 与交付保温，只保留 [livePaths] 里的会话。
+     *
+     * 与 [cleanup] 一样，读不到 shared/ 时直接放弃——否则会把所有交付标记当成孤儿清掉，
+     * 让别的应用正在读取的 URI 变成死链。标记只保留“目录还在、且属于活会话”的那些。
+     */
+    @Synchronized
+    fun deleteAllExceptLive(
+        sharedRoot: File,
+        stateRoot: File,
+        livePaths: Set<String>,
+    ): Report {
+        val entries = sessionEntriesOrNull(sharedRoot) ?: return Report(0, 0L, 0, 0, 0)
+        val liveNames = livePaths.mapNotNull { path ->
+            runCatching { File(path).name }.getOrNull()?.takeIf { it.isNotEmpty() }
+        }.toSet()
+        var deleted = 0
+        var freed = 0L
+        var keptLive = 0
+        var failed = 0
+        val remaining = mutableSetOf<String>()
+
+        for (entry in entries) {
+            if (entry.absolutePath in livePaths || entry.name in liveNames) {
+                keptLive++
+                remaining.add(entry.name)
+                continue
+            }
+            val size = sizeOf(entry)
+            if (entry.deleteRecursively()) {
+                deleted++
+                freed += size
+            } else {
+                // 删不掉就留着；对应标记也不能清，否则会变成没人负责的保温记录
+                failed++
+                remaining.add(entry.name)
+            }
+        }
+
+        // 清空模式下孤儿标记和原子写临时文件都没有保留价值；活会话的标记必须留着
+        for (marker in stateRoot.listFiles().orEmpty()) {
+            if (marker.name !in remaining) marker.delete()
+        }
+        return Report(deleted, freed, keptLive, 0, failed)
+    }
+
     /** 目录内（递归）最新的文件 mtime；空目录或读不到时返回 0 */
     fun newestFileMtime(dir: File): Long {
         var newest = 0L

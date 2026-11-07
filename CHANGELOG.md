@@ -2,6 +2,19 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)；每个 `v*` tag 会由 GitHub Actions 自动构建并发布 APK。
 
+## [2.2.0] - 2026-11-07
+
+标题栏右上角加了一个垃圾桶：手动强制清空缓存，只留下当前正在用的那一份。Windows/Android 设置里的“清除缓存”语义，只是这个应用自己实现，不依赖系统。
+
+### Added
+- **清空缓存按钮**：`MainActivity` 顶栏右侧 48dp 图标按钮，二次确认后删除 `cacheDir/shared/` 下所有非活会话目录，以及 `shared-state/` 里对应的交付标记、孤儿标记和原子写临时文件；当前会话（`CacheState` 登记 + `sessionDir`/`currentFile`/`savePendingFile` 兜底）绝不删除。
+- **结果提示**：清理在 IO 线程执行，完成后 Toast 报告释放的字节数（B/KB/MB/GB），没有可清理内容时提示“没有可清理的缓存”。
+- **单测**：新增 3 条 JVM 用例（保留活会话并删除其它、清孤儿标记与临时文件、目录不可读时不动标记），JVM 共 **88 条**。
+- **instrumentation**：新增 `clearCacheButton_keepsCurrentSession_andDeletesOtherSessions`（造一个旧会话 + 交付标记，点按钮并确认后断言旧会话/标记被删、当前会话仍在、发送仍可用），API 36 门禁共 **15 条**。
+
+### Changed
+- **版本号**：`versionName` 2.2.0，`versionCode` 最低 17（覆盖 v2.1.0 的 16）。
+
 ## [2.1.0] - 2026-11-07
 
 撤回 2.0.0 的文件夹递归。跨应用分享只授予目录这一个 URI，列子项需要 `FLAG_GRANT_PREFIX_URI_PERMISSION` 或 SAF 树授权，普通 `ACTION_SEND` 不会给；HyperOS 3 等来源上文件夹分享必然失败。与其留一个假入口，不如把路径/链接当纯文本交出去。

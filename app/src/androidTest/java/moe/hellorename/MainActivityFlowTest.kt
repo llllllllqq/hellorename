@@ -27,6 +27,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.hamcrest.CoreMatchers.not
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -396,6 +397,39 @@ class MainActivityFlowTest {
                     runCatching { context.contentResolver.delete(uri, null, null) }
                 }
             }
+        }
+    }
+
+    @Test
+    fun clearCacheButton_keepsCurrentSession_andDeletesOtherSessions() {
+        val decoy = File(context.cacheDir, CacheStore.SHARED_DIR + "/decoy-session")
+        assertTrue(decoy.mkdirs() || decoy.isDirectory)
+        File(decoy, "old.bin").writeText("old payload")
+        val stateRoot = File(context.cacheDir, CacheStore.STATE_DIR)
+        assertTrue(stateRoot.mkdirs() || stateRoot.isDirectory)
+        // 交付时刻设成“刚刚”，冷启动的自动清理会保留它；只有手动“清空缓存”才会删
+        File(stateRoot, "decoy-session").writeText(System.currentTimeMillis().toString())
+
+        val source = newSource()
+        ActivityScenario.launch<MainActivity>(sendIntent(uriFor(source))).use { scenario ->
+            waitUntilCopied(scenario)
+            onView(withId(R.id.clearCacheButton)).check(matches(isDisplayed()))
+            onView(withId(R.id.clearCacheButton)).perform(click())
+            onView(withText(R.string.clear_cache_confirm)).perform(click())
+
+            val deadline = System.currentTimeMillis() + 10_000L
+            while (System.currentTimeMillis() < deadline && decoy.exists()) {
+                Thread.sleep(100L)
+            }
+            assertFalse("其它会话应被强制清掉", decoy.exists())
+            assertFalse("被删会话的交付标记也要清掉", File(stateRoot, "decoy-session").exists())
+            val sessions = File(context.cacheDir, CacheStore.SHARED_DIR)
+                .listFiles()
+                ?.filter { it.isDirectory }
+                .orEmpty()
+            assertEquals("当前正在使用的会话必须保留", 1, sessions.size)
+            onView(withId(R.id.oldNameText)).check(matches(withText(source.name)))
+            onView(withId(R.id.sendButton)).check(matches(isEnabled()))
         }
     }
 
