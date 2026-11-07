@@ -66,10 +66,10 @@ class TestFolderProvider : DocumentsProvider() {
         val cursor = MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION)
         when (parentDocumentId) {
             "root" -> {
-                addDocumentRow(cursor, "sub")
-                addDocumentRow(cursor, "a.txt")
+                addDocumentRow(cursor, "root/sub")
+                addDocumentRow(cursor, "root/a.txt")
             }
-            "sub" -> addDocumentRow(cursor, "sub/b.txt")
+            "root/sub" -> addDocumentRow(cursor, "root/sub/b.txt")
         }
         return cursor
     }
@@ -88,7 +88,11 @@ class TestFolderProvider : DocumentsProvider() {
     private fun addDocumentRow(cursor: MatrixCursor, id: String) {
         val row = cursor.newRow()
         put(row, Document.COLUMN_DOCUMENT_ID, id)
-        val displayName = if (id == "root") "share-root" else id.substringAfterLast('/')
+        val displayName = when (id) {
+            "root" -> "share-root"
+            "root/sub" -> "sub"
+            else -> id.substringAfterLast('/')
+        }
         put(row, Document.COLUMN_DISPLAY_NAME, displayName)
         put(row, Document.COLUMN_MIME_TYPE, mimeFor(id))
         put(row, Document.COLUMN_SIZE, if (mimeFor(id) == Document.MIME_TYPE_DIR) 0 else fileFor(id).length())
@@ -97,12 +101,12 @@ class TestFolderProvider : DocumentsProvider() {
     }
 
     private fun mimeFor(id: String): String = when (id) {
-        "root", "sub" -> Document.MIME_TYPE_DIR
-        "a.txt", "sub/b.txt" -> "text/plain"
+        "root", "root/sub" -> Document.MIME_TYPE_DIR
+        "root/a.txt", "root/sub/b.txt" -> "text/plain"
         else -> "application/octet-stream"
     }
 
-    private fun fileFor(id: String): File = File(root, id)
+    private fun fileFor(id: String): File = File(root, id.removePrefix("root/"))
 
     private fun put(row: MatrixCursor.RowBuilder, column: String, value: Any?) {
         try {
