@@ -44,7 +44,10 @@ capture() {
   # UI 层级既留作证据，也用来确认前台确实是本应用而不是桌面。
   adb shell uiautomator dump /sdcard/window_dump.xml
   adb pull /sdcard/window_dump.xml "$OUT/$name-ui.xml" >/dev/null
-  grep -q "package=\"$APP_ID\"" "$OUT/$name-ui.xml"
+  if ! grep -q "package=\"$APP_ID\"" "$OUT/$name-ui.xml"; then
+    adb logcat -d -v threadtime > "$OUT/logcat.txt" || true
+    exit 1
+  fi
 }
 
 capture no light
