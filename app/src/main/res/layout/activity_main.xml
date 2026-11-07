@@ -32,7 +32,7 @@
             android:contentDescription="@string/action_clear_cache"
             android:scaleType="centerInside"
             android:src="@drawable/ic_delete"
-            android:tint="?attr/colorOnSurface" />
+            app:tint="?attr/colorOnSurface" />
     </androidx.appcompat.widget.Toolbar>
 
     <ScrollView
