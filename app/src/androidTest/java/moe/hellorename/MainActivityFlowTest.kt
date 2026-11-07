@@ -16,6 +16,7 @@ import androidx.test.espresso.Espresso.onView
 import androidx.test.espresso.action.ViewActions.click
 import androidx.test.espresso.action.ViewActions.closeSoftKeyboard
 import androidx.test.espresso.action.ViewActions.replaceText
+import androidx.test.espresso.action.ViewActions.scrollTo
 import androidx.test.espresso.assertion.ViewAssertions.matches
 import androidx.test.espresso.matcher.ViewMatchers.isDisplayed
 import androidx.test.espresso.matcher.ViewMatchers.isEnabled
@@ -101,15 +102,20 @@ class MainActivityFlowTest {
     }
 
     @Test
-    fun malformedExtraStream_doesNotCrash() {
+    fun malformedExtraStream_fallsBackToRawText() {
         val intent = Intent(context, MainActivity::class.java).apply {
             action = Intent.ACTION_SEND
             type = "*/*"
             putExtra(Intent.EXTRA_STREAM, Bundle().apply { putString("not", "a uri") })
         }
-        ActivityScenario.launch<MainActivity>(intent).use {
-            onView(withId(R.id.oldNameText)).check(matches(withText(R.string.old_name_none)))
-            onView(withId(R.id.sendButton)).check(matches(not(isEnabled())))
+        ActivityScenario.launch<MainActivity>(intent).use { scenario ->
+            waitUntilSaveEnabled(scenario)
+            onView(withId(R.id.sendButton)).check(matches(isEnabled()))
+            onView(withId(R.id.saveButton)).check(matches(isEnabled()))
+            scenario.onActivity { activity ->
+                val preview = activity.findViewById<TextView>(R.id.oldNameText).text.toString()
+                assertTrue("malformed share should be captured as raw text", preview.contains("Unrecognized share request"))
+            }
         }
     }
 
@@ -322,7 +328,7 @@ class MainActivityFlowTest {
             }
 
             onView(withId(R.id.nameInput)).perform(replaceText(unique), closeSoftKeyboard())
-            onView(withId(R.id.saveButton)).perform(click())
+            onView(withId(R.id.saveButton)).perform(scrollTo(), click())
 
             val name = "$unique.txt"
             val saved = awaitSavedFiles(mapOf(name to ""))
