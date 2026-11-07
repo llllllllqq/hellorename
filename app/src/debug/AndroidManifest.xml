@@ -11,7 +11,8 @@
             android:name=".TestFolderProvider"
             android:authorities="${applicationId}.testfolder"
             android:exported="true"
-            android:grantUriPermissions="true" />
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS" />
     </application>
 
 </manifest>
