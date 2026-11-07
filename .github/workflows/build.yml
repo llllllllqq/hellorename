@@ -69,9 +69,9 @@ jobs:
           else
             NAME="0.0.1-dev.${GITHUB_RUN_NUMBER}"
           fi
-          # v1.4.0/12、v1.5.0/13、v1.6.0/14；v2.0.0 必须能覆盖安装。
+          # v1.4.0/12、v1.5.0/13、v1.6.0/14、v2.0.0/15；v2.1.0 必须能覆盖安装。
           CODE="${GITHUB_RUN_NUMBER}"
-          if [ "$CODE" -lt 15 ]; then CODE=15; fi
+          if [ "$CODE" -lt 16 ]; then CODE=16; fi
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
           echo "构建版本: $NAME (versionCode=$CODE)"

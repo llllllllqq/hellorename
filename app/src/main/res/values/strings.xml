@@ -11,6 +11,7 @@
     <string name="old_name_loading">— reading file… —</string>
     <string name="old_multi_loading">— reading %1$d files… —</string>
     <string name="old_text_preview">Shared text:\n%1$s</string>
+    <string name="old_folder_preview">Folder:\n%1$s</string>
     <string name="old_link_preview">Shared link:\n%1$s</string>
     <string name="old_unknown_preview">Raw share content:\n%1$s</string>
     <string name="old_text_received">Shared text</string>
@@ -26,15 +27,16 @@
     <string name="hint_ext_locked">Extension is locked to %1$s and hidden from the box. Tick the box above to change it.</string>
     <string name="hint_ext_unlocked">Extension is editable. Changing it also changes the type sent to other apps.</string>
     <string name="hint_no_ext">The original file has no extension, nothing to lock.</string>
-    <string name="hint_multi_mode">Multiple files/folders: names and folder structure are kept. Rename and Send are unavailable; only Save to Downloads is available.</string>
+    <string name="hint_multi_mode">Multiple files: names are kept. Rename and Send are unavailable; only Save to Downloads is available. Folder shares are not expanded.</string>
     <string name="hint_text_mode">Saved as UTF-8 .txt (no BOM); Send forwards the original share unchanged.</string>
+    <string name="hint_folder_mode">Folder shares aren\'t expanded. The folder path/link is treated as plain text: save it as .txt, or Send to forward the original share.</string>
     <string name="hint_unknown_mode">Unrecognized share captured as UTF-8 .txt; Send forwards the original request unchanged.</string>
 
     <string name="status_no_file">No file yet. Share a file from another app, or tap “Pick a file”.</string>
     <string name="status_nothing_shared">This share has no file or text to save.</string>
     <string name="status_multi_reading">Reading %1$d shared items…</string>
-    <string name="status_multi_empty">The shared folder contains no files to save.</string>
-    <string name="status_folder_unreadable">Could not read the shared folder. Re-share it with folder access, or grant access from a file manager.</string>
+    <string name="status_multi_empty">The share contains no files to save.</string>
+    <string name="status_multi_unreadable">Could not read the shared items. Share them again.</string>
     <string name="status_multi_saving">Saving file %1$d of %2$d…</string>
     <string name="status_multi_pick_folder">Choose a folder to save %1$d files.</string>
     <string name="status_multi_partial">Saved %1$d of %2$d files; %3$d failed. Tap Save to retry.</string>
@@ -42,6 +44,7 @@
     <string name="status_text_preparing">Preparing shared text…</string>
     <string name="status_text_prepare_failed">Could not prepare the shared text. Tap Save to retry.</string>
     <string name="status_text_ready">Text is ready. Rename and save, or Send to forward the original share.</string>
+    <string name="status_folder_ready">Folder path captured as text. Save it as .txt, or Send to forward the original share.</string>
     <string name="status_unknown_ready">Unrecognized share captured. Save the raw content, or Send to forward the original request.</string>
     <string name="status_text_expired">The shared text is no longer available. Share it again.</string>
     <string name="status_copying">Copying file…</string>
@@ -67,6 +70,10 @@
     <plurals name="status_multi_ready">
         <item quantity="one">%1$d file ready. Only Save to Downloads is available.</item>
         <item quantity="other">%1$d files ready. Only Save to Downloads is available.</item>
+    </plurals>
+    <plurals name="status_multi_skipped_folders">
+        <item quantity="one">%1$d folder skipped; saving %2$d file.</item>
+        <item quantity="other">%1$d folders skipped; saving %2$d files.</item>
     </plurals>
     <string name="toast_no_share_app">No app can receive this file type.</string>
     <string name="toast_sent">Pick a different app to receive the file; don\'t pick %1$s again.</string>

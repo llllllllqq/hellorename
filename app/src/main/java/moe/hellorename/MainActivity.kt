@@ -98,9 +98,6 @@ class MainActivity : AppCompatActivity() {
     private var multiNames: List<String> = emptyList()
     private var multiMimes: List<String> = emptyList()
 
-    /** 每个待保存文件的相对目录（不含 Download 根，空串表示根目录）；与 multiUris 平行 */
-    private var multiPaths: List<String> = emptyList()
-
     /** 多文件保存已经成功的下标：部分失败后重试只补没成功的 */
     private val multiSaved = mutableSetOf<Int>()
     private var multiSaving = false
@@ -112,6 +109,9 @@ class MainActivity : AppCompatActivity() {
 
     /** 未知分享兜底：内容是对原始 Intent 的转储，而不是普通文本 */
     private var textUnknown = false
+
+    /** 文件夹分享兜底：内容是被分享文件夹的 URI（路径/链接），按纯文本处理 */
+    private var textFromFolder = false
 
     /** 纯文本/未知模式的“发送”要原样转发这个来源 Intent（不重新编码内容） */
     private var originalShareIntent: Intent? = null
@@ -389,11 +389,11 @@ class MainActivity : AppCompatActivity() {
         outState.putStringArrayList(KEY_MULTI_URIS, ArrayList(multiUris.map { it.toString() }))
         outState.putStringArrayList(KEY_MULTI_NAMES, ArrayList(multiNames))
         outState.putStringArrayList(KEY_MULTI_MIMES, ArrayList(multiMimes))
-        outState.putStringArrayList(KEY_MULTI_PATHS, ArrayList(multiPaths))
         outState.putIntegerArrayList(KEY_MULTI_SAVED, ArrayList(multiSaved))
         outState.putBoolean(KEY_MULTI_AWAITING_TREE, multiAwaitingTree)
         // 超大文本不进 Bundle（TransactionTooLarge 会直接把界面重建打崩）；缓存文件还在时无需重放文本。
         outState.putBoolean(KEY_TEXT_UNKNOWN, textUnknown)
+        outState.putBoolean(KEY_TEXT_FOLDER, textFromFolder)
         if (textContent.length <= MAX_TEXT_STATE_CHARS) {
             outState.putString(KEY_TEXT_CONTENT, textContent)
             outState.putParcelable(KEY_SHARE_INTENT, originalShareIntent)
@@ -455,13 +455,14 @@ class MainActivity : AppCompatActivity() {
         }
 
         val forwardIntent = Intent(intent)
+        val declaredType = intent.type
         val allUris = collectAllUris(intent)
         val supported = allUris.filter(::isSupportedFileUri)
         val unsupported = allUris.filterNot(::isSupportedFileUri)
         val text = collectText(intent)
         when {
-            supported.size > 1 -> loadMulti(supported)
-            supported.size == 1 -> loadSource(supported.first())
+            supported.size > 1 -> loadMulti(supported, forwardIntent, declaredType)
+            supported.size == 1 -> loadSource(supported.first(), forwardIntent, declaredType)
             else -> {
                 // 纯文本 / http(s) 等非文件 URI：保存成 UTF-8 文本文件，不再报“不支持”。
                 val payload = buildTextPayload(text, unsupported)
@@ -596,8 +597,14 @@ class MainActivity : AppCompatActivity() {
     /**
      * 多文件分享：不再“只处理第一个”。文件名不可改，保存时逐个写进下载目录。
      * 元数据查询放在 IO；确认名称后再允许保存，避免用户点了保存却还不知道会存成什么。
+     *
+     * 文件夹不再展开：混在多文件里的文件夹会被跳过；如果全是文件夹，整单按纯文本处理。
      */
-    private fun loadMulti(uris: List<Uri>) {
+    private fun loadMulti(
+        uris: List<Uri>,
+        forwardIntent: Intent? = null,
+        declaredType: String? = null,
+    ) {
         val generation = operations.begin()
         cancelOperations()
         releaseSessionDir()
@@ -606,13 +613,13 @@ class MainActivity : AppCompatActivity() {
         multiUris = uris
         multiNames = emptyList()
         multiMimes = emptyList()
-        multiPaths = emptyList()
         multiSaved.clear()
         multiSaving = false
         multiAwaitingTree = false
         textPreparing = false
         textContent = ""
         textUnknown = false
+        textFromFolder = false
         originalShareIntent = null
         sourceUri = null
         sourceMime = null
@@ -637,7 +644,7 @@ class MainActivity : AppCompatActivity() {
         binding.progress.visibility = View.VISIBLE
         setButtonsEnabled(false)
         setStatus(getString(R.string.status_multi_reading, uris.size), isError = false)
-        readMultiMeta(generation)
+        readMultiMeta(generation, forwardIntent, declaredType)
     }
 
     private fun setupMultiUi() {
@@ -655,26 +662,44 @@ class MainActivity : AppCompatActivity() {
         setInput("")
     }
 
-    private fun readMultiMeta(generation: Long) {
+    /**
+     * 读取多文件的元数据。文件夹不再展开：
+     * - 全是文件夹 → 整单降级为纯文本，保存的就是这些 URI（路径/链接）；
+     * - 文件和文件夹混在一起 → 只保存文件，并在状态里说明跳过了几个文件夹。
+     */
+    private fun readMultiMeta(
+        generation: Long,
+        forwardIntent: Intent? = null,
+        declaredType: String? = null,
+    ) {
         loadingMeta = true
         val roots = multiUris
         lifecycleScope.launch {
-            val entries = try {
-                withContext(Dispatchers.IO) { expandMultiEntries(roots) }
+            val scan = try {
+                withContext(Dispatchers.IO) { scanMulti(roots, declaredType) }
             } catch (error: Throwable) {
-                Log.w(TAG, "folder expansion failed", error)
+                Log.w(TAG, "multi scan failed", error)
                 null
             }
             if (!isActive || !operations.isCurrent(generation) || mode != ShareMode.MULTI) return@launch
             loadingMeta = false
-            if (entries == null) {
+            if (scan == null) {
                 copyDone = false
                 binding.progress.visibility = View.GONE
                 setButtonsEnabled(false)
-                setStatus(getString(R.string.status_folder_unreadable), isError = true)
+                setStatus(getString(R.string.status_multi_unreadable), isError = true)
                 return@launch
             }
-            if (entries.isEmpty()) {
+            if (scan.files.isEmpty()) {
+                if (scan.folders.isNotEmpty()) {
+                    // 文件夹内容需要来源授予子项权限，跨应用分享拿不到；按纯文本处理路径/链接。
+                    loadText(
+                        content = scan.folders.joinToString("\n") { it.toString() },
+                        forwardIntent = forwardIntent,
+                        folder = true,
+                    )
+                    return@launch
+                }
                 copyDone = false
                 binding.oldNameText.text = getString(R.string.status_multi_empty)
                 binding.progress.visibility = View.GONE
@@ -683,46 +708,60 @@ class MainActivity : AppCompatActivity() {
                 return@launch
             }
             multiSaved.clear()
-            multiUris = entries.map { it.uri }
-            multiNames = entries.map { it.name }
-            multiMimes = entries.map { mimeForSaving(FileNameUtils.split(it.name).ext, it.mime) }
-            multiPaths = entries.map { it.relativeDir }
+            multiUris = scan.files.map { it.uri }
+            multiNames = scan.files.map { it.name }
+            multiMimes = scan.files.map { mimeForSaving(FileNameUtils.split(it.name).ext, it.mime) }
             copyDone = true
             binding.oldNameText.text = buildMultiList()
             binding.progress.visibility = View.GONE
             setButtonsEnabled(true)
-            val count = entries.size
+            val count = scan.files.size
+            val skipped = scan.folders.size
             setStatus(
-                resources.getQuantityString(R.plurals.status_multi_ready, count, count),
+                if (skipped > 0) {
+                    resources.getQuantityString(
+                        R.plurals.status_multi_skipped_folders,
+                        skipped,
+                        skipped,
+                        count,
+                    )
+                } else {
+                    resources.getQuantityString(R.plurals.status_multi_ready, count, count)
+                },
                 isError = false,
             )
         }
     }
 
-    /** 展开多文件/文件夹来源；文件夹按 DocumentsProvider 的父子关系递归，保留相对目录 */
-    private fun expandMultiEntries(roots: List<Uri>): List<ExpandedEntry> {
-        val out = mutableListOf<ExpandedEntry>()
+    private class MultiScan(
+        val files: List<MultiEntry>,
+        val folders: List<Uri>,
+    )
+
+    /** 只在 IO 线程调用：把来源分成“可保存的文件”和“被跳过的文件夹” */
+    private fun scanMulti(roots: List<Uri>, declaredType: String? = null): MultiScan {
+        val files = mutableListOf<MultiEntry>()
+        val folders = mutableListOf<Uri>()
+        val allFolders = isDirectoryMime(declaredType)
         roots.forEachIndexed { index, uri ->
             val meta = try {
                 readSourceMeta(uri)
             } catch (_: Throwable) {
                 SourceMeta("", -1L, null)
             }
-            if (isDirectoryUri(uri, meta.mime)) {
-                val rootName = folderComponent(meta.name, index)
-                expandDirectory(uri, rootName, out, depth = 0)
+            if (allFolders || isDirectoryUri(uri, meta.mime)) {
+                folders.add(uri)
             } else {
-                out.add(
-                    ExpandedEntry(
+                files.add(
+                    MultiEntry(
                         uri = uri,
-                        relativeDir = "",
                         name = multiDisplayName(meta, index),
                         mime = meta.mime ?: mimeForExtension(FileNameUtils.split(meta.name).ext),
                     ),
                 )
             }
         }
-        return out
+        return MultiScan(files, folders)
     }
 
     private fun isDirectoryMime(mime: String?): Boolean =
@@ -733,6 +772,7 @@ class MainActivity : AppCompatActivity() {
         return isDirectoryMime(queryDocumentMime(uri))
     }
 
+    /** 目录 MIME 查询：只用于判断“这是文件夹，该降级成纯文本”，不再展开子项 */
     private fun queryDocumentMime(uri: Uri): String? {
         val target = try {
             if (DocumentsContract.isTreeUri(uri)) {
@@ -761,93 +801,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun expandDirectory(
-        uri: Uri,
-        rootName: String,
-        out: MutableList<ExpandedEntry>,
-        depth: Int,
-    ) {
-        val tree = if (DocumentsContract.isTreeUri(uri)) uri else null
-        val rootId = if (tree != null) {
-            DocumentsContract.getTreeDocumentId(uri)
-        } else {
-            DocumentsContract.getDocumentId(uri)
-        }
-        expandChildren(tree, uri.authority, rootId, rootName, out, depth)
-    }
-
-    private fun expandChildren(
-        tree: Uri?,
-        authority: String?,
-        parentId: String,
-        relativeDir: String,
-        out: MutableList<ExpandedEntry>,
-        depth: Int,
-    ) {
-        if (depth > MAX_FOLDER_DEPTH) throw IllegalStateException("folder too deep")
-        if (out.size > MAX_MULTI_ENTRIES) throw IllegalStateException("too many files")
-        val children = if (tree != null) {
-            DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentId)
-        } else {
-            val auth = authority ?: throw IllegalStateException("missing authority")
-            DocumentsContract.buildChildDocumentsUri(auth, parentId)
-        }
-        val cursor = contentResolver.query(
-            children,
-            arrayOf(
-                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                DocumentsContract.Document.COLUMN_MIME_TYPE,
-            ),
-            null,
-            null,
-            null,
-        ) ?: return
-        cursor.use { c ->
-            while (c.moveToNext()) {
-                val id = c.getString(0) ?: continue
-                val name = c.getString(1).orEmpty()
-                val mime = c.getString(2)
-                val child = if (tree != null) {
-                    DocumentsContract.buildDocumentUriUsingTree(tree, id)
-                } else {
-                    DocumentsContract.buildDocumentUri(authority!!, id)
-                }
-                if (isDirectoryMime(mime)) {
-                    val childName = folderComponent(name, out.size)
-                    expandChildren(
-                        tree = tree,
-                        authority = authority,
-                        parentId = id,
-                        relativeDir = relativeDir + "/" + childName,
-                        out = out,
-                        depth = depth + 1,
-                    )
-                } else {
-                    out.add(
-                        ExpandedEntry(
-                            uri = child,
-                            relativeDir = relativeDir,
-                            name = multiDisplayName(SourceMeta(name, -1L, mime), out.size),
-                            mime = mime ?: FALLBACK_MIME,
-                        ),
-                    )
-                    if (out.size > MAX_MULTI_ENTRIES) {
-                        throw IllegalStateException("too many files")
-                    }
-                }
-            }
-        }
-    }
-
-    private fun folderComponent(raw: String, index: Int): String {
-        val fallback = getString(R.string.fallback_name) + "_" + (index + 1)
-        val cleaned = FileNameUtils.sanitizeBase(raw)
-            .ifEmpty { fallback }
-        return FileNameUtils.truncateUtf8(cleaned, FileNameUtils.MAX_NAME_BYTES)
-            .ifEmpty { fallback }
-    }
-
     /** 多文件名只做清洗/长度限制，不改用户看到的名字；重名交给系统或目录内的唯一名逻辑 */
     private fun multiDisplayName(meta: SourceMeta, index: Int): String {
         val fallback = getString(R.string.fallback_name) + "_" + (index + 1)
@@ -862,8 +815,6 @@ class MainActivity : AppCompatActivity() {
         return buildString {
             shown.forEachIndexed { position, index ->
                 if (position > 0) append('\n')
-                val path = multiPaths.getOrNull(index).orEmpty()
-                if (path.isNotEmpty()) append(path).append('/')
                 append(multiNames[index])
             }
             if (multiNames.size > shown.size) {
@@ -880,6 +831,7 @@ class MainActivity : AppCompatActivity() {
         content: String,
         forwardIntent: Intent? = null,
         unknown: Boolean = false,
+        folder: Boolean = false,
     ) {
         val generation = operations.begin()
         cancelOperations()
@@ -888,11 +840,11 @@ class MainActivity : AppCompatActivity() {
         mode = ShareMode.TEXT
         textContent = content
         textUnknown = unknown
+        textFromFolder = folder
         originalShareIntent = forwardIntent?.let { Intent(it) }
         multiUris = emptyList()
         multiNames = emptyList()
         multiMimes = emptyList()
-        multiPaths = emptyList()
         multiSaved.clear()
         multiSaving = false
         multiAwaitingTree = false
@@ -930,11 +882,21 @@ class MainActivity : AppCompatActivity() {
         binding.allowExtCheck.isChecked = lockedExt == null
         binding.allowExtCheck.isEnabled = true
         binding.allowExtCheck.setOnCheckedChangeListener { _, isChecked -> applyExtLock(!isChecked) }
-        binding.hintText.text = getString(
-            if (textUnknown) R.string.hint_unknown_mode else R.string.hint_text_mode,
-        )
+        binding.hintText.text = getString(textHintRes())
         binding.warningText.visibility = View.GONE
         hideChecksums()
+    }
+
+    private fun textHintRes(): Int = when {
+        textUnknown -> R.string.hint_unknown_mode
+        textFromFolder -> R.string.hint_folder_mode
+        else -> R.string.hint_text_mode
+    }
+
+    private fun textReadyStatusRes(): Int = when {
+        textUnknown -> R.string.status_unknown_ready
+        textFromFolder -> R.string.status_folder_ready
+        else -> R.string.status_text_ready
     }
 
     private fun sharedTextPreview(text: String): String {
@@ -947,6 +909,7 @@ class MainActivity : AppCompatActivity() {
         }
         val label = when {
             textUnknown -> R.string.old_unknown_preview
+            textFromFolder -> R.string.old_folder_preview
             LINK_PATTERN.matches(trimmed) -> R.string.old_link_preview
             else -> R.string.old_text_preview
         }
@@ -988,12 +951,7 @@ class MainActivity : AppCompatActivity() {
             sessionDir?.let { CacheState.register(it) }
             binding.progress.visibility = View.GONE
             setButtonsEnabled(true)
-            setStatus(
-                getString(
-                    if (textUnknown) R.string.status_unknown_ready else R.string.status_text_ready,
-                ),
-                isError = false,
-            )
+            setStatus(getString(textReadyStatusRes()), isError = false)
         }
     }
 
@@ -1015,7 +973,11 @@ class MainActivity : AppCompatActivity() {
      * 加载一个新的分享源。Provider 查询（getType/query）全部放到 IO：
      * 慢 Provider 或恶意 Provider 不能再用 Binder 调用把主线程卡到 ANR（H4）。
      */
-    private fun loadSource(uri: Uri) {
+    private fun loadSource(
+        uri: Uri,
+        forwardIntent: Intent? = null,
+        declaredType: String? = null,
+    ) {
         val generation = operations.begin()
         cancelOperations()
         releaseSessionDir()
@@ -1025,13 +987,13 @@ class MainActivity : AppCompatActivity() {
         multiUris = emptyList()
         multiNames = emptyList()
         multiMimes = emptyList()
-        multiPaths = emptyList()
         multiSaved.clear()
         multiSaving = false
         multiAwaitingTree = false
         textPreparing = false
         textContent = ""
         textUnknown = false
+        textFromFolder = false
         originalShareIntent = null
         binding.oldNameLabel.setText(R.string.label_original_name)
         binding.warningText.visibility = View.VISIBLE
@@ -1072,11 +1034,18 @@ class MainActivity : AppCompatActivity() {
             if (!isActive || !operations.isCurrent(generation)) return@launch
             loadingMeta = false
 
-            // 分享的是文件夹时切到多文件/文件夹保存流程；单文件仍走原来的改名/发送。
-            val directory = withContext(Dispatchers.IO) { isDirectoryUri(uri, meta.mime) }
+            // 文件夹不再展开：跨应用分享拿不到子项授权，按纯文本处理这个路径/链接。
+            // intent.type 也是线索：有些来源给的 URI 连 MIME 都查不到（例如 file:// 路径）。
+            val directory = withContext(Dispatchers.IO) {
+                isDirectoryMime(declaredType) || isDirectoryUri(uri, meta.mime)
+            }
             if (!isActive || !operations.isCurrent(generation)) return@launch
             if (directory) {
-                loadMulti(listOf(uri))
+                loadText(
+                    content = uri.toString(),
+                    forwardIntent = forwardIntent,
+                    folder = true,
+                )
                 return@launch
             }
 
@@ -1107,10 +1076,9 @@ class MainActivity : AppCompatActivity() {
     /** 源文件的名字、大小与 MIME（SIZE 拿不到时返回 -1：pipe 型 Provider 报不出来） */
     private class SourceMeta(val name: String, val size: Long, val mime: String?)
 
-    /** 展开文件夹后的一个待保存文件；relativeDir 是相对目录（不含 Download 根） */
-    private class ExpandedEntry(
+    /** 多文件模式里的一个待保存文件 */
+    private class MultiEntry(
         val uri: Uri,
-        val relativeDir: String,
         val name: String,
         val mime: String,
     )
@@ -1283,10 +1251,6 @@ class MainActivity : AppCompatActivity() {
             .orEmpty()
         multiNames = state.getStringArrayList(KEY_MULTI_NAMES).orEmpty()
         multiMimes = state.getStringArrayList(KEY_MULTI_MIMES).orEmpty()
-        multiPaths = state.getStringArrayList(KEY_MULTI_PATHS).orEmpty()
-        if (multiPaths.size != multiNames.size) {
-            multiPaths = List(multiNames.size) { "" }
-        }
         multiSaved.clear()
         state.getIntegerArrayList(KEY_MULTI_SAVED)
             ?.filter { it in multiUris.indices }
@@ -1303,12 +1267,13 @@ class MainActivity : AppCompatActivity() {
         sessionDir = null
         copyDone = multiUris.isNotEmpty() &&
             multiNames.size == multiUris.size &&
-            multiPaths.size == multiUris.size
+            multiMimes.size == multiUris.size
         checksums = null
         lockedExt = null
         savePendingFile = null
         textContent = ""
         textUnknown = false
+        textFromFolder = false
         originalShareIntent = null
         handedOutPaths.clear()
 
@@ -1352,6 +1317,7 @@ class MainActivity : AppCompatActivity() {
         mode = ShareMode.TEXT
         textContent = state.getString(KEY_TEXT_CONTENT).orEmpty()
         textUnknown = state.getBoolean(KEY_TEXT_UNKNOWN, false)
+        textFromFolder = state.getBoolean(KEY_TEXT_FOLDER, false)
         originalShareIntent = state.getParcelable<Intent>(KEY_SHARE_INTENT)
         originalName = state.getString(KEY_ORIGINAL_NAME).orEmpty()
         originalBase = state.getString(KEY_ORIGINAL_BASE).orEmpty()
@@ -1378,7 +1344,6 @@ class MainActivity : AppCompatActivity() {
         multiUris = emptyList()
         multiNames = emptyList()
         multiMimes = emptyList()
-        multiPaths = emptyList()
         multiSaved.clear()
         multiSaving = false
         multiAwaitingTree = false
@@ -1404,10 +1369,8 @@ class MainActivity : AppCompatActivity() {
                 getString(
                     if (state.getBoolean(KEY_WAS_SAVING, false)) {
                         R.string.status_save_interrupted
-                    } else if (textUnknown) {
-                        R.string.status_unknown_ready
                     } else {
-                        R.string.status_text_ready
+                        textReadyStatusRes()
                     },
                 ),
                 isError = state.getBoolean(KEY_WAS_SAVING, false),
@@ -2288,7 +2251,7 @@ class MainActivity : AppCompatActivity() {
     private fun saveMulti() {
         if (mode != ShareMode.MULTI || multiSaving || multiAwaitingTree) return
         if (multiUris.isEmpty() || !copyDone) return
-        if (multiNames.size != multiUris.size || multiPaths.size != multiUris.size) return
+        if (multiNames.size != multiUris.size || multiMimes.size != multiUris.size) return
         val generation = operations.current()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             runMultiSave(generation) { index ->
@@ -2296,7 +2259,6 @@ class MainActivity : AppCompatActivity() {
                     source = multiUris[index],
                     displayName = multiNames[index],
                     mime = multiMimes.getOrElse(index) { FALLBACK_MIME },
-                    relativeDir = multiPaths.getOrElse(index) { "" },
                     cancelled = { !operations.isCurrent(generation) },
                 )
             }
@@ -2395,14 +2357,13 @@ class MainActivity : AppCompatActivity() {
         source: Uri,
         displayName: String,
         mime: String,
-        relativeDir: String,
         cancelled: () -> Boolean,
     ): Boolean {
         if (cancelled()) return false
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
             put(MediaStore.MediaColumns.MIME_TYPE, mime)
-            put(MediaStore.MediaColumns.RELATIVE_PATH, downloadRelativePath(relativeDir))
+            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/")
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
         val out = try {
@@ -2457,7 +2418,6 @@ class MainActivity : AppCompatActivity() {
                 source = multiUris[index],
                 displayName = multiNames[index],
                 mime = multiMimes.getOrElse(index) { FALLBACK_MIME },
-                relativeDir = multiPaths.getOrElse(index) { "" },
                 generation = generation,
             )
         }
@@ -2468,15 +2428,14 @@ class MainActivity : AppCompatActivity() {
         source: Uri,
         displayName: String,
         mime: String,
-        relativeDir: String,
         generation: Long,
     ): Boolean {
-        val parent = ensureTreeDirectory(tree, relativeDir) ?: return false
         val parentId = try {
-            DocumentsContract.getDocumentId(parent)
+            DocumentsContract.getTreeDocumentId(tree)
         } catch (_: Throwable) {
             return false
         }
+        val parent = DocumentsContract.buildDocumentUriUsingTree(tree, parentId)
         val name = uniqueTreeName(tree, parentId, displayName)
         val document = try {
             DocumentsContract.createDocument(contentResolver, parent, mime, name)
@@ -2513,97 +2472,6 @@ class MainActivity : AppCompatActivity() {
                     // 删除失败时保留可能是半成品；状态栏会明确提示有文件失败
                 }
             }
-        }
-    }
-
-    /**
-     * 把相对目录拼成 MediaStore 的 RELATIVE_PATH。MediaProvider 会为父目录执行 mkdirs，
-     * 所以嵌套路径可以直接写；这里再做一次逐段清洗，避免 `..` 或分隔符逃逸。
-     */
-    private fun downloadRelativePath(relativeDir: String): String {
-        val parts = relativeDir.split('/')
-            .map { FileNameUtils.sanitizeBase(it) }
-            .filter { it.isNotEmpty() }
-        return if (parts.isEmpty()) {
-            Environment.DIRECTORY_DOWNLOADS + "/"
-        } else {
-            Environment.DIRECTORY_DOWNLOADS + "/" + parts.joinToString("/") + "/"
-        }
-    }
-
-    /** 在 SAF 目标树里逐级查找/创建目录，返回最终父目录的 document URI */
-    private fun ensureTreeDirectory(tree: Uri, relativeDir: String): Uri? {
-        val rootId = try {
-            DocumentsContract.getTreeDocumentId(tree)
-        } catch (_: Throwable) {
-            return null
-        }
-        var parent = DocumentsContract.buildDocumentUriUsingTree(tree, rootId)
-        var parentId = rootId
-        val parts = relativeDir.split('/')
-            .map { FileNameUtils.sanitizeBase(it) }
-            .filter { it.isNotEmpty() }
-        for (part in parts) {
-            val existing = findTreeChild(tree, parentId, part)
-            if (existing != null) {
-                parent = existing.first
-                parentId = existing.second
-                continue
-            }
-            val name = uniqueTreeName(tree, parentId, part)
-            val created = try {
-                DocumentsContract.createDocument(
-                    contentResolver,
-                    parent,
-                    DocumentsContract.Document.MIME_TYPE_DIR,
-                    name,
-                )
-            } catch (_: Throwable) {
-                null
-            } ?: return null
-            parent = created
-            parentId = try {
-                DocumentsContract.getDocumentId(created)
-            } catch (_: Throwable) {
-                return null
-            }
-        }
-        return parent
-    }
-
-    /** 在 SAF 目录里按名字找子目录（忽略大小写），找不到返回 null */
-    private fun findTreeChild(
-        tree: Uri,
-        parentId: String,
-        displayName: String,
-    ): Pair<Uri, String>? {
-        return try {
-            val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentId)
-            contentResolver.query(
-                children,
-                arrayOf(
-                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                    DocumentsContract.Document.COLUMN_MIME_TYPE,
-                ),
-                null,
-                null,
-                null,
-            )?.use { cursor ->
-                while (cursor.moveToNext()) {
-                    val name = cursor.getString(1).orEmpty()
-                    val mime = cursor.getString(2)
-                    if (mime == DocumentsContract.Document.MIME_TYPE_DIR &&
-                        name.equals(displayName, ignoreCase = true)
-                    ) {
-                        val id = cursor.getString(0) ?: return@use null
-                        return@use DocumentsContract.buildDocumentUriUsingTree(tree, id) to id
-                    }
-                }
-                null
-            }
-        } catch (_: Throwable) {
-            null
         }
     }
 
@@ -2951,7 +2819,7 @@ class MainActivity : AppCompatActivity() {
         val locked = lockedExt
         binding.hintText.text = when {
             mode == ShareMode.MULTI -> getString(R.string.hint_multi_mode)
-            mode == ShareMode.TEXT && locked != null -> getString(R.string.hint_text_mode)
+            mode == ShareMode.TEXT -> getString(textHintRes())
             originalExt.isEmpty() -> getString(R.string.hint_no_ext)
             locked != null -> getString(R.string.hint_ext_locked, locked)
             else -> getString(R.string.hint_ext_unlocked)
@@ -3016,13 +2884,13 @@ class MainActivity : AppCompatActivity() {
         multiUris = emptyList()
         multiNames = emptyList()
         multiMimes = emptyList()
-        multiPaths = emptyList()
         multiSaved.clear()
         multiSaving = false
         multiAwaitingTree = false
         textPreparing = false
         textContent = ""
         textUnknown = false
+        textFromFolder = false
         originalShareIntent = null
         currentFile = null
         releaseSessionDir()
@@ -3194,8 +3062,6 @@ class MainActivity : AppCompatActivity() {
         const val BACKGROUND_GRACE_MS = 30 * 60 * 1000L
         const val EXTERNAL_STORAGE_AUTHORITY = "com.android.externalstorage.documents"
         const val MULTI_LIST_LIMIT = 8
-        const val MAX_FOLDER_DEPTH = 32
-        const val MAX_MULTI_ENTRIES = 2000
         const val TEXT_PREVIEW_CHARS = 300
         const val MAX_TEXT_STATE_CHARS = 100_000
         val LINK_PATTERN = Regex("(?i)^(https?|ftp)://\\S+$")
@@ -3223,11 +3089,11 @@ class MainActivity : AppCompatActivity() {
         const val KEY_MULTI_URIS = "multi_uris"
         const val KEY_MULTI_NAMES = "multi_names"
         const val KEY_MULTI_MIMES = "multi_mimes"
-        const val KEY_MULTI_PATHS = "multi_paths"
         const val KEY_MULTI_SAVED = "multi_saved"
         const val KEY_MULTI_AWAITING_TREE = "multi_awaiting_tree"
         const val KEY_TEXT_CONTENT = "text_content"
         const val KEY_TEXT_UNKNOWN = "text_unknown"
+        const val KEY_TEXT_FOLDER = "text_folder"
         const val KEY_SHARE_INTENT = "share_intent"
     }
 

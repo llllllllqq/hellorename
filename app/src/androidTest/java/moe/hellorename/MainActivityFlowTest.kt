@@ -234,7 +234,7 @@ class MainActivityFlowTest {
     }
 
     @Test
-    fun folderShare_preservesNestedStructure() {
+    fun folderShare_isTreatedAsPlainText() {
         val authority = "${context.packageName}.testfolder"
         val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
         val intent = Intent(context, MainActivity::class.java).apply {
@@ -245,49 +245,42 @@ class MainActivityFlowTest {
         }
         ActivityScenario.launch<MainActivity>(intent).use { scenario ->
             waitUntilSaveEnabled(scenario)
-            onView(withId(R.id.nameInput)).check(matches(not(isEnabled())))
-            onView(withId(R.id.sendButton)).check(matches(not(isEnabled())))
+            // 文件夹按纯文本处理：可改名、可保存、可原样转发。
+            onView(withId(R.id.nameInput)).check(matches(isEnabled()))
+            onView(withId(R.id.sendButton)).check(matches(isEnabled()))
             scenario.onActivity { activity ->
-                val listed = activity.findViewById<TextView>(R.id.oldNameText).text.toString()
-                assertTrue("root file missing: $listed", listed.contains("share-root/a.txt"))
-                assertTrue("nested file missing: $listed", listed.contains("share-root/sub/b.txt"))
+                val preview = activity.findViewById<TextView>(R.id.oldNameText).text.toString()
+                assertTrue("folder uri should be shown as text: $preview", preview.contains(tree.toString()))
+                val hint = activity.findViewById<TextView>(R.id.hintText).text.toString()
+                assertTrue("hint should explain plain-text fallback: $hint", hint.contains("plain text"))
             }
 
-            onView(withId(R.id.saveButton)).perform(scrollTo(), click())
+            scenario.recreate()
+            onView(withId(R.id.nameInput)).check(matches(isEnabled()))
+            onView(withId(R.id.sendButton)).check(matches(isEnabled()))
+            scenario.onActivity { activity ->
+                val preview = activity.findViewById<TextView>(R.id.oldNameText).text.toString()
+                assertTrue("folder uri lost after recreate: $preview", preview.contains(tree.toString()))
+            }
 
-            val expected = mapOf("a.txt" to "folder-a", "b.txt" to "folder-b")
-            val saved = awaitSavedFiles(expected)
+            var displayName = ""
+            scenario.onActivity { activity ->
+                displayName = activity.findViewById<EditText>(R.id.nameInput).text.toString() + ".txt"
+            }
+            onView(withId(R.id.saveButton)).perform(scrollTo(), click())
+            val saved = awaitSavedFiles(mapOf(displayName to tree.toString()))
             try {
-                saved.forEach { (name, uri) ->
-                    val actual = context.contentResolver.openInputStream(uri)?.use { input ->
-                        input.readBytes().toString(StandardCharsets.UTF_8)
-                    }
-                    assertEquals(expected[name], actual)
-                    val relative = relativePathOf(uri)
-                    if (name == "a.txt") {
-                        assertTrue("wrong root path: $relative", relative.contains("share-root"))
-                    } else {
-                        assertTrue("wrong nested path: $relative", relative.contains("share-root/sub"))
-                    }
+                val uri = saved.getValue(displayName)
+                val actual = context.contentResolver.openInputStream(uri)?.use { input ->
+                    input.readBytes().toString(StandardCharsets.UTF_8)
                 }
+                assertEquals(tree.toString(), actual)
             } finally {
                 saved.values.forEach { uri ->
                     runCatching { context.contentResolver.delete(uri, null, null) }
                 }
             }
         }
-    }
-
-    private fun relativePathOf(uri: Uri): String {
-        return context.contentResolver.query(
-            uri,
-            arrayOf(MediaStore.MediaColumns.RELATIVE_PATH),
-            null,
-            null,
-            null,
-        )?.use { cursor ->
-            if (cursor.moveToFirst()) cursor.getString(0).orEmpty() else ""
-        }.orEmpty()
     }
 
     @Test

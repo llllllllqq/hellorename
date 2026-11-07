@@ -121,7 +121,7 @@ HOME=$PWD/.android-user android docs fetch \
 - 纯文本/未知模式：“发送”原样转发来源 `Intent`，**不重新编码**正文；保存固定 UTF-8 无 BOM，换行原样保留（未知转储用 LF）。
 - 保存 MIME 走 `chooseSaveMime` / `mimeForSaving`：当来源 MIME 的规范扩展名和实际扩展名冲突时按扩展名推断，避免 MediaStore 把 `.ini` 存成 `.ini.txt`。
 - 文件名只做清洗（非法字符、bidi、C0/C1、240 UTF-8 字节截断），不改用户输入；重名交给系统。
-- 多文件/文件夹只能保存，不能改名/发送；文件夹递归依赖来源 provider 的子项授权，见 README「已知限制」。
+- 多文件只能保存，不能改名/发送；文件夹分享不展开，按纯文本处理（保存/转发的就是它的 URI/路径），见 README「已知限制」。
 - 缓存清理绝不能碰当前正在用的会话（`CacheState` + 交付标记），别为了“干净”扩大删除范围。
 
 ## 8. Agent 行为准则
@@ -159,7 +159,7 @@ $HOME/Android/Sdk/build-tools/36.0.0/aapt2 dump badging .verify/v2.0.0/*.apk | h
 ## 10. 高频坑（都踩过）
 
 - MediaStore 的 `text/plain` 只映射到 `txt`：保存时必须显式给 MIME，否则 `.ini` → `.ini.txt`。
-- 文件夹分享没有平台契约：`ACTION_SEND` 默认只授予**那一个 URI**；没有 `FLAG_GRANT_PREFIX_URI_PERMISSION` 就列不出子项（`SecurityException`），同 UID 的 instrumentation 测不出来。
+- 文件夹分享没有平台契约：`ACTION_SEND` 默认只授予**那一个 URI**；没有 `FLAG_GRANT_PREFIX_URI_PERMISSION` 就列不出子项（`SecurityException`）。所以 2.1.0 起不再展开文件夹，统一按纯文本处理；同 UID 的 instrumentation 测不出跨应用授权差异。
 - instrumentation 跑完会卸载被测 App：`emulator_ui_check.sh` 里先重装 debug APK 再截图。
 - QA 构建的包名是 `moe.hellorename.debug`，`qa_check.py` 必须带 `--expect-package`，否则误报。
 - 文本模式不要把正文和链接拼在一起，也不要把 CRLF 改成 LF（用户会拿它做逐字节对比）。
