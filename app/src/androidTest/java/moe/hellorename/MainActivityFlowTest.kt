@@ -1,14 +1,18 @@
 package moe.hellorename
 
+import android.content.ContentUris
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.provider.MediaStore
 import android.view.View
 import android.widget.Button
+import android.widget.EditText
 import android.widget.TextView
 import androidx.core.content.FileProvider
 import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso.onView
+import androidx.test.espresso.action.ViewActions.click
 import androidx.test.espresso.action.ViewActions.closeSoftKeyboard
 import androidx.test.espresso.action.ViewActions.replaceText
 import androidx.test.espresso.assertion.ViewAssertions.matches
@@ -20,11 +24,13 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.hamcrest.CoreMatchers.not
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.nio.charset.StandardCharsets
 
 /**
  * API 36 模拟器上的主流程 / 生命周期测试（由 QA 与 Release 的模拟器门禁执行）。
@@ -122,9 +128,8 @@ class MainActivityFlowTest {
     }
 
     @Test
-    fun textOnlyShare_keepsExistingFile() {
+    fun textShare_switchesToTextMode_andKeepsEditedNameAfterRecreate() {
         val source = newSource()
-        val displayName = source.name
         val originalIntent = sendIntent(uriFor(source))
         ActivityScenario.launch<MainActivity>(originalIntent).use { scenario ->
             waitUntilCopied(scenario)
@@ -140,9 +145,135 @@ class MainActivityFlowTest {
                 )
             }
 
-            onView(withId(R.id.nameInput)).check(matches(withText("still-here")))
-            onView(withId(R.id.oldNameText)).check(matches(withText(displayName)))
+            waitUntilSaveEnabled(scenario)
+            scenario.onActivity { activity ->
+                val input = activity.findViewById<EditText>(R.id.nameInput)
+                assertTrue("text mode must allow renaming", input.isEnabled)
+                assertTrue(
+                    "default text name should be YYYYMMDD_hhmmss, was ${input.text}",
+                    input.text.toString().matches(Regex("\\d{8}_\\d{6}")),
+                )
+                assertFalse(activity.findViewById<Button>(R.id.sendButton).isEnabled)
+                assertTrue(activity.findViewById<Button>(R.id.saveButton).isEnabled)
+                val oldName = activity.findViewById<TextView>(R.id.oldNameText).text.toString()
+                assertTrue("shared text preview missing", oldName.contains("just text"))
+            }
+
+            onView(withId(R.id.nameInput)).perform(replaceText("text-name"), closeSoftKeyboard())
+            scenario.recreate()
+
+            onView(withId(R.id.nameInput)).check(matches(withText("text-name")))
+            onView(withId(R.id.sendButton)).check(matches(not(isEnabled())))
+            onView(withId(R.id.saveButton)).check(matches(isEnabled()))
             scenario.onActivity { it.intent = originalIntent }
+        }
+    }
+
+    @Test
+    fun multiShare_disablesRenameAndSend_andSavesAllFiles() {
+        val first = newSource("multi-first-${System.nanoTime()}.png", "first payload")
+        val second = newSource("multi-second-${System.nanoTime()}.png", "second payload")
+        val names = mapOf(first.name to "first payload", second.name to "second payload")
+        val intent = Intent(context, MainActivity::class.java).apply {
+            action = Intent.ACTION_SEND_MULTIPLE
+            type = "image/png"
+            putParcelableArrayListExtra(Intent.EXTRA_STREAM, arrayListOf(uriFor(first), uriFor(second)))
+        }
+        ActivityScenario.launch<MainActivity>(intent).use { scenario ->
+            waitUntilSaveEnabled(scenario)
+            onView(withId(R.id.nameInput)).check(matches(not(isEnabled())))
+            onView(withId(R.id.sendButton)).check(matches(not(isEnabled())))
+            onView(withId(R.id.saveButton)).check(matches(isEnabled()))
+            scenario.onActivity { activity ->
+                val listed = activity.findViewById<TextView>(R.id.oldNameText).text.toString()
+                assertTrue("first file missing from list: $listed", listed.contains(first.name))
+                assertTrue("second file missing from list: $listed", listed.contains(second.name))
+            }
+
+            scenario.recreate()
+            onView(withId(R.id.nameInput)).check(matches(not(isEnabled())))
+            onView(withId(R.id.sendButton)).check(matches(not(isEnabled())))
+            onView(withId(R.id.saveButton)).check(matches(isEnabled()))
+
+            onView(withId(R.id.saveButton)).perform(click())
+            val saved = awaitSavedFiles(names)
+            try {
+                saved.forEach { (name, uri) ->
+                    val actual = context.contentResolver.openInputStream(uri)?.use { input ->
+                        input.readBytes().toString(StandardCharsets.UTF_8)
+                    }
+                    assertEquals(names[name], actual)
+                }
+            } finally {
+                saved.values.forEach { uri ->
+                    runCatching { context.contentResolver.delete(uri, null, null) }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun textShare_savesSharedTextAsTxt() {
+        val unique = "text-${System.nanoTime()}"
+        val body = "text payload ${System.nanoTime()}"
+        val intent = Intent(context, MainActivity::class.java).apply {
+            action = Intent.ACTION_SEND
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, body)
+        }
+        ActivityScenario.launch<MainActivity>(intent).use { scenario ->
+            waitUntilSaveEnabled(scenario)
+            onView(withId(R.id.sendButton)).check(matches(not(isEnabled())))
+            onView(withId(R.id.nameInput)).perform(replaceText(unique), closeSoftKeyboard())
+            onView(withId(R.id.saveButton)).perform(click())
+
+            val name = "$unique.txt"
+            val saved = awaitSavedFiles(mapOf(name to body))
+            try {
+                val uri = saved.getValue(name)
+                val actual = context.contentResolver.openInputStream(uri)?.use { input ->
+                    input.readBytes().toString(StandardCharsets.UTF_8)
+                }
+                assertEquals(body, actual)
+            } finally {
+                saved.values.forEach { uri ->
+                    runCatching { context.contentResolver.delete(uri, null, null) }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun linkShare_savesUrlAsText() {
+        val unique = "link-${System.nanoTime()}"
+        val url = "https://example.com/${System.nanoTime()}"
+        val intent = Intent(context, MainActivity::class.java).apply {
+            action = Intent.ACTION_SEND
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, url)
+        }
+        ActivityScenario.launch<MainActivity>(intent).use { scenario ->
+            waitUntilSaveEnabled(scenario)
+            scenario.onActivity { activity ->
+                val oldName = activity.findViewById<TextView>(R.id.oldNameText).text.toString()
+                assertTrue("link preview missing", oldName.contains(url))
+            }
+            onView(withId(R.id.nameInput)).perform(replaceText(unique), closeSoftKeyboard())
+            onView(withId(R.id.saveButton)).perform(click())
+
+            val name = "$unique.txt"
+            val saved = awaitSavedFiles(mapOf(name to url))
+            try {
+                val uri = saved.getValue(name)
+                val actual = context.contentResolver.openInputStream(uri)?.use { input ->
+                    input.readBytes().toString(StandardCharsets.UTF_8)
+                }
+                assertEquals(url, actual)
+            } finally {
+                saved.values.forEach { uri ->
+                    runCatching { context.contentResolver.delete(uri, null, null) }
+                }
+            }
         }
     }
 
@@ -183,11 +314,14 @@ class MainActivityFlowTest {
         }
     }
 
-    private fun newSource(): File {
+    private fun newSource(
+        name: String = "source-${System.nanoTime()}.png",
+        content: String = "hello from instrumentation",
+    ): File {
         val dir = File(context.cacheDir, CacheStore.SHARED_DIR)
         dir.mkdirs()
-        val file = File(dir, "source-${System.nanoTime()}.png")
-        file.writeText("hello from instrumentation")
+        val file = File(dir, name)
+        file.writeText(content)
         return file
     }
 
@@ -211,5 +345,50 @@ class MainActivityFlowTest {
             Thread.sleep(100L)
         }
         throw AssertionError("copy did not finish within 20s")
+    }
+
+    private fun waitUntilSaveEnabled(scenario: ActivityScenario<MainActivity>) {
+        val deadline = System.currentTimeMillis() + 20_000L
+        while (System.currentTimeMillis() < deadline) {
+            var enabled = false
+            scenario.onActivity { activity ->
+                enabled = activity.findViewById<Button>(R.id.saveButton).isEnabled
+            }
+            if (enabled) return
+            Thread.sleep(100L)
+        }
+        throw AssertionError("save did not become available within 20s")
+    }
+
+    /** 轮询 MediaStore，直到所有预期 DISPLAY_NAME 都出现；返回 name -> content Uri */
+    private fun awaitSavedFiles(expected: Map<String, String>): Map<String, Uri> {
+        val deadline = System.currentTimeMillis() + 20_000L
+        while (System.currentTimeMillis() < deadline) {
+            val found = mutableMapOf<String, Uri>()
+            val projection = arrayOf(MediaStore.MediaColumns._ID)
+            for (name in expected.keys) {
+                try {
+                    context.contentResolver.query(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                        projection,
+                        "${MediaStore.MediaColumns.DISPLAY_NAME}=?",
+                        arrayOf(name),
+                        null,
+                    )?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            found[name] = ContentUris.withAppendedId(
+                                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                                cursor.getLong(0),
+                            )
+                        }
+                    }
+                } catch (_: Throwable) {
+                    // 查询偶发失败：下一轮再试
+                }
+            }
+            if (found.size == expected.size) return found
+            Thread.sleep(100L)
+        }
+        throw AssertionError("saved files not found in Downloads: ${expected.keys}")
     }
 }

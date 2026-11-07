@@ -4,8 +4,15 @@
     <string name="chooser_title">分享重命名后的文件</string>
 
     <string name="label_original_name">原文件名</string>
+    <string name="label_files_to_save">要保存的文件</string>
+    <string name="label_text_file_name">文件名</string>
     <string name="old_name_none">—（还没有收到文件）—</string>
     <string name="old_name_loading">—（正在读取文件…）—</string>
+    <string name="old_multi_loading">—（正在读取 %1$d 个文件…）—</string>
+    <string name="old_text_preview">分享的文本：\n%1$s</string>
+    <string name="old_link_preview">分享的链接：\n%1$s</string>
+    <string name="old_text_received">分享的文本</string>
+    <string name="multi_more">……还有 %1$d 个</string>
     <string name="fallback_name">file</string>
     <string name="hint_new_name">新文件名</string>
     <string name="action_send">发送</string>
@@ -17,9 +24,20 @@
     <string name="hint_ext_locked">扩展名锁定为 %1$s（不显示在输入框里），勾选上面的选项即可修改。</string>
     <string name="hint_ext_unlocked">扩展名可修改，改完会影响分享给对方的文件类型。</string>
     <string name="hint_no_ext">原文件没有扩展名，无法锁定。</string>
+    <string name="hint_multi_mode">多文件模式：文件名保持不变，改名和“发送”不可用，只能“保存到下载”。</string>
+    <string name="hint_text_mode">将以 .txt 文件保存；分享文本时“发送”不可用。</string>
 
     <string name="status_no_file">还没收到文件。可以从别的应用分享文件过来，或点上面的“选择一个文件”。</string>
-    <string name="status_text_only">收到的是纯文本，不是文件，本应用只能处理文件分享。</string>
+    <string name="status_nothing_shared">这次分享没有可保存的文件或文本。</string>
+    <string name="status_multi_reading">正在读取 %1$d 个文件…</string>
+    <string name="status_multi_saving">正在保存第 %1$d / %2$d 个文件…</string>
+    <string name="status_multi_pick_folder">请选择保存 %1$d 个文件的文件夹。</string>
+    <string name="status_multi_partial">已保存 %1$d / %2$d 个文件，%3$d 个失败；点“保存到下载”重试。</string>
+    <string name="status_multi_canceled">已取消保存。</string>
+    <string name="status_text_preparing">正在准备分享的文本…</string>
+    <string name="status_text_prepare_failed">准备分享文本失败，点“保存到下载”重试。</string>
+    <string name="status_text_ready">分享的文本已就绪，可以改名后保存到下载。</string>
+    <string name="status_text_expired">分享的文本已失效，请重新分享。</string>
     <string name="status_copying">正在复制文件…</string>
     <string name="status_copying_percent">正在复制文件… %1$d%%</string>
     <string name="status_copying_size">正在复制文件… %1$s</string>
@@ -40,12 +58,15 @@
     <string name="status_save_interrupted">上次保存被中断，请重新点“保存到下载”。</string>
     <string name="status_save_incomplete">保存失败，目标文件可能不完整，请检查下载目录。</string>
     <string name="status_cache_protect_failed">无法建立缓存保护（存储空间可能已满），请清理空间后重试。</string>
-    <plurals name="status_multi">
-        <item quantity="other">收到 %1$d 个文件，本版本只处理第 1 个。</item>
+    <plurals name="status_multi_ready">
+        <item quantity="other">%1$d 个文件已就绪，只能“保存到下载”。</item>
     </plurals>
     <string name="toast_no_share_app">没有找到能接收该类型文件的应用。</string>
     <string name="toast_sent">请选择其它应用接收文件，勿再选「%1$s」。</string>
     <string name="toast_saved">已保存到下载：%1$s</string>
+    <plurals name="toast_saved_multi">
+        <item quantity="other">已保存 %1$d 个文件到下载。</item>
+    </plurals>
     <string name="toast_save_failed">保存文件失败。</string>
     <string name="checksum_title">文件校验值</string>
     <string name="checksum_hint">可与源文件对比。推荐使用 SHA-256；MD5/SHA-1 仅用于兼容旧工具。</string>

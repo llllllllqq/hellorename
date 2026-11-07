@@ -1,6 +1,9 @@
 package moe.hellorename
 
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 
 /**
  * 文件名相关的纯逻辑，刻意不依赖任何 Android API，方便单元测试。
@@ -27,6 +30,19 @@ object FileNameUtils {
     const val TOAST_NAME_MAX_CHARS = 32
 
     data class Parts(val base: String, val ext: String)
+
+    /**
+     * 纯文本/链接分享的默认文件名：本地时区的 `YYYYMMDD_hhmmss`（24 小时制，精确到秒）。
+     * 固定用 [Locale.US] 只影响数字/日历，不影响时区；不同设备上格式一致。
+     */
+    fun timestampBase(
+        now: Long = System.currentTimeMillis(),
+        zone: TimeZone = TimeZone.getDefault(),
+    ): String {
+        val format = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+        format.timeZone = zone
+        return format.format(Date(now))
+    }
 
     /**
      * 拆出基础名与扩展名（扩展名含前导点）。

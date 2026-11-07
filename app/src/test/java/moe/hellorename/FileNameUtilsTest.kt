@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.TimeZone
 
 class FileNameUtilsTest {
 
@@ -249,6 +250,21 @@ class FileNameUtilsTest {
         assertFalse(short.contains('\uFFFD'))
         assertTrue(short.endsWith(".png"))
         assertTrue(short.codePointCount(0, short.length) <= 20)
+    }
+
+    // ---------- timestampBase ----------
+
+    @Test
+    fun `timestampBase is YYYYMMDD_hhmmss in the requested zone`() {
+        // 2026-11-07 12:36:52 +08:00
+        assertEquals(
+            "20261107_123652",
+            FileNameUtils.timestampBase(1794026212000L, TimeZone.getTimeZone("Asia/Shanghai")),
+        )
+        assertEquals(
+            "20261107_043652",
+            FileNameUtils.timestampBase(1794026212000L, TimeZone.getTimeZone("UTC")),
+        )
     }
 
     // ---------- extensionKey ----------

@@ -4,8 +4,15 @@
     <string name="chooser_title">Share renamed file</string>
 
     <string name="label_original_name">Original file name</string>
+    <string name="label_files_to_save">Files to save</string>
+    <string name="label_text_file_name">File name</string>
     <string name="old_name_none">— no file received yet —</string>
     <string name="old_name_loading">— reading file… —</string>
+    <string name="old_multi_loading">— reading %1$d files… —</string>
+    <string name="old_text_preview">Shared text:\n%1$s</string>
+    <string name="old_link_preview">Shared link:\n%1$s</string>
+    <string name="old_text_received">Shared text</string>
+    <string name="multi_more">…and %1$d more</string>
     <string name="fallback_name">file</string>
     <string name="hint_new_name">New file name</string>
     <string name="action_send">Send</string>
@@ -17,9 +24,20 @@
     <string name="hint_ext_locked">Extension is locked to %1$s and hidden from the box. Tick the box above to change it.</string>
     <string name="hint_ext_unlocked">Extension is editable. Changing it also changes the type sent to other apps.</string>
     <string name="hint_no_ext">The original file has no extension, nothing to lock.</string>
+    <string name="hint_multi_mode">Multiple files: names are kept as-is. Rename and Send are unavailable; only Save to Downloads is available.</string>
+    <string name="hint_text_mode">Saved as a .txt file. Send is unavailable for shared text.</string>
 
     <string name="status_no_file">No file yet. Share a file from another app, or tap “Pick a file”.</string>
-    <string name="status_text_only">Only plain text was shared, not a file. This app handles file shares only.</string>
+    <string name="status_nothing_shared">This share has no file or text to save.</string>
+    <string name="status_multi_reading">Reading %1$d files…</string>
+    <string name="status_multi_saving">Saving file %1$d of %2$d…</string>
+    <string name="status_multi_pick_folder">Choose a folder to save %1$d files.</string>
+    <string name="status_multi_partial">Saved %1$d of %2$d files; %3$d failed. Tap Save to retry.</string>
+    <string name="status_multi_canceled">Save canceled.</string>
+    <string name="status_text_preparing">Preparing shared text…</string>
+    <string name="status_text_prepare_failed">Could not prepare the shared text. Tap Save to retry.</string>
+    <string name="status_text_ready">Shared text is ready. Rename it if needed, then save to Downloads.</string>
+    <string name="status_text_expired">The shared text is no longer available. Share it again.</string>
     <string name="status_copying">Copying file…</string>
     <string name="status_copying_percent">Copying file… %1$d%%</string>
     <string name="status_copying_size">Copying file… %1$s</string>
@@ -40,13 +58,17 @@
     <string name="status_save_interrupted">The last save was interrupted. Tap “Save to Downloads” to try again.</string>
     <string name="status_save_incomplete">Save failed, and the target file may be incomplete. Please check Downloads.</string>
     <string name="status_cache_protect_failed">Could not protect the cache file (storage may be full). Free up space and try again.</string>
-    <plurals name="status_multi">
-        <item quantity="one">%1$d file received. This version only handles the first one.</item>
-        <item quantity="other">%1$d files received. This version only handles the first one.</item>
+    <plurals name="status_multi_ready">
+        <item quantity="one">%1$d file ready. Only Save to Downloads is available.</item>
+        <item quantity="other">%1$d files ready. Only Save to Downloads is available.</item>
     </plurals>
     <string name="toast_no_share_app">No app can receive this file type.</string>
     <string name="toast_sent">Pick a different app to receive the file; don\'t pick %1$s again.</string>
     <string name="toast_saved">Saved to Downloads: %1$s</string>
+    <plurals name="toast_saved_multi">
+        <item quantity="one">Saved %1$d file to Downloads.</item>
+        <item quantity="other">Saved %1$d files to Downloads.</item>
+    </plurals>
     <string name="toast_save_failed">Could not save the file.</string>
     <string name="checksum_title">File checksums</string>
     <string name="checksum_hint">Compare with the source file. SHA-256 is recommended; MD5/SHA-1 are for compatibility.</string>
