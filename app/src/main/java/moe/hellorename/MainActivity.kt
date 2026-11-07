@@ -721,6 +721,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (textPreparing) return
         textPreparing = true
+        releaseSessionDir()
         binding.progress.isIndeterminate = true
         binding.progress.progress = 0
         binding.progress.visibility = View.VISIBLE

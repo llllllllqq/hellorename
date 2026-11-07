@@ -9,6 +9,7 @@ import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
+import androidx.annotation.RequiresApi
 import androidx.core.content.FileProvider
 import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso.onView
@@ -42,6 +43,7 @@ import java.nio.charset.StandardCharsets
  *  - 异常 EXTRA_STREAM 不崩溃（L5）；
  *  - Parcelable[] 形式的 EXTRA_STREAM 仍能识别。
  */
+@RequiresApi(android.os.Build.VERSION_CODES.Q)
 @RunWith(AndroidJUnit4::class)
 class MainActivityFlowTest {
 
@@ -159,13 +161,26 @@ class MainActivityFlowTest {
                 assertTrue("shared text preview missing", oldName.contains("just text"))
             }
 
+            scenario.onActivity { it.intent = originalIntent }
+        }
+    }
+
+    @Test
+    fun textShare_restoresEditedNameAfterRecreate() {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            action = Intent.ACTION_SEND
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, "just text")
+        }
+        ActivityScenario.launch<MainActivity>(intent).use { scenario ->
+            waitUntilSaveEnabled(scenario)
             onView(withId(R.id.nameInput)).perform(replaceText("text-name"), closeSoftKeyboard())
+
             scenario.recreate()
 
             onView(withId(R.id.nameInput)).check(matches(withText("text-name")))
             onView(withId(R.id.sendButton)).check(matches(not(isEnabled())))
             onView(withId(R.id.saveButton)).check(matches(isEnabled()))
-            scenario.onActivity { it.intent = originalIntent }
         }
     }
 
