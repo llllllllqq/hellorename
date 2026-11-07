@@ -2,7 +2,9 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)；每个 `v*` tag 会由 GitHub Actions 自动构建并发布 APK。
 
-## [Unreleased]
+## [2.0.0] - 2026-11-07
+
+分享入口的又一次扩展：多文件分享可以带上整棵目录树；纯文本和无法识别的调用不再只是“落个 .txt”，还能原样转发给别的应用；顺手修掉 `.ini` 被存成 `.ini.txt` 的问题。因为新增了文件夹分享和转发能力，按语义化版本升到 2.0.0。
 
 ### Added
 - **文件夹分享**：`ACTION_SEND` / `ACTION_SEND_MULTIPLE` 中的目录/树 URI 会递归展开；Android 10+ 用 `MediaStore` 的 `RELATIVE_PATH` 保留 `Download/<根目录>/<子目录>/...`，Android 7–9 在 SAF 目标目录里逐级 `createDocument(..., MIME_TYPE_DIR, ...)`。不新增 manifest 权限，依赖来源 Provider 的目录/子项授权；空文件夹不复制。
@@ -12,7 +14,8 @@
 ### Changed
 - **纯文本模式**：保存为 UTF-8 无 BOM `.txt`，不规范化换行（CRLF/CR/LF 原样）；默认名仍是本地时区 `YYYYMMDD_hhmmss`。发送不再禁用。
 - **多文件 UI**：列表显示相对路径（如 `share-root/sub/b.txt`），保存时按 `multiPaths` 创建/复用子目录。
-- **测试**：新增 debug-only `TestFolderProvider` 与 `folderShare_preservesNestedStructure`，覆盖文件夹递归展开和 MediaStore 相对路径；未知分享/畸形 `EXTRA_STREAM` 用例同步到新兜底行为。API 36 instrumentation 共 **14 条**。
+- **版本号**：`versionName` 2.0.0，`versionCode` 最低 15（覆盖 v1.6.0 的 14）。
+- **测试**：新增 debug-only `TestFolderProvider` 与 `folderShare_preservesNestedStructure`，覆盖文件夹递归展开和 MediaStore 相对路径；未知分享/畸形 `EXTRA_STREAM` 用例同步到新兜底行为。JVM 单测 **85 条**，API 36 instrumentation **14 条**。
 
 ### Fixed
 - **保存 `.ini` 等非标准扩展名时被追加 `.txt`**：当分享方把文件报成 `text/plain`、而 Android 的 MIME 表里 `text/plain` 只对应 `txt` 时，MediaStore 会把 `desktop.ini` 保存成 `desktop.ini.txt`。保存时若源 MIME 的规范扩展名与当前扩展名冲突，改用扩展名推断的 MIME（推断不到则 `application/octet-stream`），单文件和多文件共用该规则，保留原扩展名。
