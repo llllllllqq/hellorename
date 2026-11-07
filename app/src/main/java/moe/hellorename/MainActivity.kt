@@ -527,14 +527,13 @@ class MainActivity : AppCompatActivity() {
         return ""
     }
 
-    /** 文本 + 非文件 URI 一起分享时，两者都保住：先正文，再补链接行 */
+    /**
+     * 纯文本保存只写正文本身，绝不追加/改写换行；正文为空时才退回第一个非文件 URI。
+     * 文本 + 链接同时存在时，链接仍由“发送”原样转发，不会污染保存的 txt。
+     */
     private fun buildTextPayload(text: String, unsupported: List<Uri>): String {
-        val link = unsupported.firstOrNull()?.toString().orEmpty()
-        return when {
-            text.isBlank() -> link
-            link.isBlank() || text.contains(link) -> text
-            else -> text + "\n\n" + link
-        }
+        if (text.isNotBlank()) return text
+        return unsupported.firstOrNull()?.toString().orEmpty()
     }
 
     /**

@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### Added
+- **文件夹分享**：`ACTION_SEND` / `ACTION_SEND_MULTIPLE` 中的目录/树 URI 会递归展开；Android 10+ 用 `MediaStore` 的 `RELATIVE_PATH` 保留 `Download/<根目录>/<子目录>/...`，Android 7–9 在 SAF 目标目录里逐级 `createDocument(..., MIME_TYPE_DIR, ...)`。不新增 manifest 权限，依赖来源 Provider 的目录/子项授权；空文件夹不复制。
+- **纯文本/未知请求的“发送”**：文本模式和多文件以外的未知兜底现在启用发送按钮，直接把来源 `Intent` 复制到 chooser，不在应用里重新编码内容；仅在有 `ClipData`/`EXTRA_STREAM` 时补 `FLAG_GRANT_READ_URI_PERMISSION`。
+- **未知请求兜底**：没有可读文件/文本的分享或非 `ACTION_MAIN` 调用，生成 `Intent.toUri(URI_INTENT_SCHEME)` 原始转储并保存为 `.txt`，同时保留原 Intent 供转发。
+
+### Changed
+- **纯文本模式**：保存为 UTF-8 无 BOM `.txt`，不规范化换行（CRLF/CR/LF 原样）；默认名仍是本地时区 `YYYYMMDD_hhmmss`。发送不再禁用。
+- **多文件 UI**：列表显示相对路径（如 `share-root/sub/b.txt`），保存时按 `multiPaths` 创建/复用子目录。
+- **测试**：新增 debug-only `TestFolderProvider` 与 `folderShare_preservesNestedStructure`，覆盖文件夹递归展开和 MediaStore 相对路径；未知分享/畸形 `EXTRA_STREAM` 用例同步到新兜底行为。API 36 instrumentation 共 **14 条**。
+
 ### Fixed
 - **保存 `.ini` 等非标准扩展名时被追加 `.txt`**：当分享方把文件报成 `text/plain`、而 Android 的 MIME 表里 `text/plain` 只对应 `txt` 时，MediaStore 会把 `desktop.ini` 保存成 `desktop.ini.txt`。保存时若源 MIME 的规范扩展名与当前扩展名冲突，改用扩展名推断的 MIME（推断不到则 `application/octet-stream`），单文件和多文件共用该规则，保留原扩展名。
 
