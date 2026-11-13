@@ -2,6 +2,20 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)；每个 `v*` tag 会由 GitHub Actions 自动构建并发布 APK。
 
+## [2.3.1] - 2026-11-13
+
+防御性小版本：把“打开方式”的 `content` scheme 显式写进 manifest，不改变框架语义，只是不再依赖框架的隐式推断。
+
+### Changed
+- **VIEW filter 显式化**：新增 `<data android:mimeType="*/*" android:scheme="content"/>` 的 filter，与原有的“只写 MIME”“只写 `content` scheme 兜底 null type”两条并存。框架本来就把“只声明 MIME”的 filter 视为支持 `content:` / `file:`（Data test 规则 4），显式写出来只是把“OEM 解析器没实现这条隐式规则”的可能性降到最低——HyperOS/MIUI 的 `MiuiResolverActivity` 会自己再算一遍候选列表，第三方模块（HyperSelect 等）也是围绕它做排序/隐藏。
+- **SEND 保持不带 scheme**：`ACTION_SEND` / `SEND_MULTIPLE` 仍然只写 MIME。分享请求一般没有 data URI，一旦带上 `content` scheme，scheme 为 null 的 Intent 会直接 `NO_MATCH_DATA`；新增用例守住这一点。
+- **版本号**：`versionName` 2.3.1，`versionCode` 最低 19（覆盖 v2.3.0 的 18）。
+
+### Testing
+- 新增 `sendIntentFilters_resolveTypedIntentsWithoutData`（`SEND` / `SEND_MULTIPLE` 在无 data URI 时仍解析到本应用），API 36 instrumentation 共 **20 条**；JVM 仍 88 条。
+- `qa_check.py` 新增“VIEW 显式声明 `content` scheme + `*/*`”断言。
+- README「已知限制」补充：HyperOS/MIUI 的“打开方式”由小米自己实现，候选会分成“推荐选项 / 其他选项”并按使用频率排序；看不到本应用时往下翻或设为默认即可，这不是 manifest 少声明了什么。
+
 ## [2.3.0] - 2026-11-13
 
 分享之外再开一个入口：文件管理器、邮件附件、浏览器下载完成后的“打开”也能直接调起本应用。进入后和单文件分享走同一条“复制 → 改名 → 发送/保存”，源文件依旧不动，依旧零权限。

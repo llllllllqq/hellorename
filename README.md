@@ -156,7 +156,7 @@ gradle assembleRelease                               # 或 ./gradlew assembleRel
 
 ```bash
 gradle test                    # 88 条 JVM 单测（文件名/缓存/流复制/操作代际/校验值/时间戳）
-gradle connectedDebugAndroidTest   # 需要模拟器或真机；API 36 门禁，19 条 instrumentation
+gradle connectedDebugAndroidTest   # 需要模拟器或真机；API 36 门禁，20 条 instrumentation
 ```
 
 ## 隐私
@@ -171,6 +171,7 @@ gradle connectedDebugAndroidTest   # 需要模拟器或真机；API 36 门禁，
 - 文件夹分享不读取内容：`ACTION_SEND` 默认只授予那一个 URI，子项是另外的 URI，跨应用拿不到（需要 `FLAG_GRANT_PREFIX_URI_PERMISSION` 或 SAF 树授权）。应用不申请存储权限、也不绕过 Provider，所以统一把文件夹的 URI/路径当纯文本保存/转发；要传内容请多选文件或先打包。
 - “打开方式”收到的 `file://` 裸路径能进来但读不了：本应用没有存储权限，`/sdcard` 下的路径会被系统拒绝，界面会报“源文件不可用”。这类来源请改用文件管理器里的分享（`content://`）。
 - 只声明 MIME 的 `ACTION_VIEW` filter 只放行 `content:` / `file:`，`http(s)` 链接不会被本应用接管（浏览器里点链接不会弹到改名助手）。
+- HyperOS / MIUI 的“打开方式”是小米自己实现的（`com.android.internal.app.MiuiResolverActivity`），会把候选分成“推荐选项 / 其他选项”并按使用频率排序；在那里看不到本应用时，往下翻到“其他选项”，或者把本应用设为默认打开方式。这是 OEM 的 UI 行为，不是 manifest 少声明了什么——可以用 `adb shell pm query-activities ...` 确认本应用确实在系统候选里。
 - 多文件保存到 `Download/` 根；不再保留来源的目录层级（文件夹本身已经不展开）。
 - 纯文本/链接保存的是文本本身（`.txt`），不会抓取或下载链接指向的网页/文件；文本换行按原样写入，未知请求转储使用 LF。
 - 未知请求的原始转储可能包含原 Intent 的 extras，保存前请确认内容。

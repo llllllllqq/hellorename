@@ -42,8 +42,23 @@
 
             <!--
                 作为“打开方式”接收方：文件管理器/邮件附件/浏览器下载完成的“打开”都用 ACTION_VIEW。
-                只声明 MIME、不声明 scheme 时，框架只放行 content: / file:（见 Intents and intent filters
-                的 Data test 规则 4），所以不会抢 http(s) 链接。
+                这一条把 content scheme 和任意 MIME 都显式写出来：框架本来就会把“只声明 MIME”的 filter
+                视为支持 content:/file:（见 Intents and intent filters 的 Data test 规则 4），
+                但 HyperOS/MIUI 的 MiuiResolverActivity 这类 OEM 解析器会自己再算一遍候选列表；
+                显式声明不改变框架语义，只是把“OEM 漏掉隐式规则”这个变量降到最低。
+                显式 content scheme 也保证不会抢 http(s) 链接。
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data
+                    android:mimeType="*/*"
+                    android:scheme="content" />
+            </intent-filter>
+
+            <!--
+                上面那条只覆盖 content:。这条不写 scheme，按框架规则还能接住 file: 和“没有 data URI”的 VIEW；
+                保留它是为了不退化成比 2.3.0 更窄的匹配面。
             -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -53,9 +68,9 @@
 
             <!--
                 MIME 缺失时的兜底：来源没有 setType()、provider 的 getType() 也拿不到类型时，
-                上面 `*/*` 的 filter 匹配不上（IntentFilter.findMimeType(null) 直接返回 false）。
+                上面两条都匹配不上（IntentFilter.findMimeType(null) 直接返回 false）。
                 这里只声明 content scheme，专门接住这种“只有 URI、没有类型”的打开请求。
-                不能和上面那条合成一条：同一个 intent-filter 里多个 <data> 是“与”的关系。
+                不能和上面两条合成一条：同一个 intent-filter 里多个 <data> 是“与”的关系。
             -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />

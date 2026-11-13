@@ -274,6 +274,27 @@ class MainActivityFlowTest {
         )
     }
 
+    /**
+     * SEND / SEND_MULTIPLE 的 filter 不能带 scheme：分享请求一般没有 data URI，
+     * 一旦写成 content scheme，scheme 为 null 的 Intent 会直接判 NO_MATCH_DATA。
+     */
+    @Test
+    fun sendIntentFilters_resolveTypedIntentsWithoutData() {
+        val pm = context.packageManager
+        val sends = listOf(
+            Intent(Intent.ACTION_SEND).apply { type = "text/plain" },
+            Intent(Intent.ACTION_SEND).apply { type = "*/*" },
+            Intent(Intent.ACTION_SEND_MULTIPLE).apply { type = "image/*" },
+        )
+        for (intent in sends) {
+            val resolved = pm.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
+            assertTrue(
+                "$intent 应解析到本应用，实际: $resolved",
+                resolved.any { it.activityInfo.packageName == context.packageName },
+            )
+        }
+    }
+
     @Test
     fun multiShare_disablesRenameAndSend_andSavesAllFiles() {
         val first = newSource("multi-first-${System.nanoTime()}.png", "first payload")

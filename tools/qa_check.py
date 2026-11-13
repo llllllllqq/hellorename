@@ -255,6 +255,25 @@ def manifest_checks(aapt2: str, apk: str, expected_authority: str) -> None:
         for action in ("android.intent.action.SEND", "android.intent.action.SEND_MULTIPLE"):
             check(action in actions, f"注册了 {action.split('.')[-1]} 分享接收")
         check("android.intent.action.VIEW" in actions, "注册了 VIEW（可作为“打开方式”接收）")
+        view_filters = [
+            f for f in find_children(activity, "intent-filter")
+            if any(
+                attr_str(a["attrs"].get("name")) == "android.intent.action.VIEW"
+                for a in find_children(f, "action")
+            )
+        ]
+        typed_content = any(
+            any(
+                attr_str(d["attrs"].get("scheme")) == "content"
+                and attr_str(d["attrs"].get("mimeType")) == "*/*"
+                for d in find_children(f, "data")
+            )
+            for f in view_filters
+        )
+        check(
+            typed_content,
+            "VIEW 显式声明 content scheme + */*（不依赖框架的隐式 content/file 推断）",
+        )
         check("android.intent.action.MAIN" in actions, "注册了 MAIN（可从启动器打开）")
         check("android.intent.category.LAUNCHER" in categories, "注册了 LAUNCHER")
 
