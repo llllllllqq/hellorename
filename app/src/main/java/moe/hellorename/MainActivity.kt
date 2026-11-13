@@ -490,7 +490,7 @@ class MainActivity : AppCompatActivity() {
      * 走的是和单文件分享完全相同的一条路——复制到缓存、改名、再发送/保存，源文件不动。
      *
      * 只带 URI、连 type 都没有的请求也照收：manifest 里专门有一条只有 content scheme 的兜底 filter，
-     * 因为 `*/*` 的 filter 匹配不上 type 为 null 的 Intent（IntentFilter.findMimeType(null) 直接 false）。
+     * 因为通配 MIME 的 filter 匹配不上 type 为 null 的 Intent（IntentFilter.findMimeType(null) 直接 false）。
      * 目录沿用 2.1.0 的既定策略——不展开，按纯文本处理它的 URI。
      */
     private fun handleViewIntent(intent: Intent) {
