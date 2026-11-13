@@ -2,6 +2,7 @@ package moe.hellorename
 
 import android.content.ContentUris
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.DocumentsContract
@@ -40,6 +41,7 @@ import java.nio.charset.StandardCharsets
  *
  * 用 FileProvider content:// URI 提供测试源文件，覆盖：
  *  - 分享进入 → 复制完成 → 显示 MD5/SHA-1/SHA-256；
+ *  - “打开方式”（ACTION_VIEW）与单文件分享走同一条路；
  *  - 配置重建后输入/旧文件名/复制状态/校验值不丢（H1）；
  *  - ACTION_MAIN 重进不清空当前文件（L6）；
  *  - 异常 EXTRA_STREAM 不崩溃（L5）；
@@ -189,6 +191,87 @@ class MainActivityFlowTest {
             onView(withId(R.id.sendButton)).check(matches(isEnabled()))
             onView(withId(R.id.saveButton)).check(matches(isEnabled()))
         }
+    }
+
+    @Test
+    fun viewIntent_copiesFileLikeShare() {
+        val source = newSource("opened-${System.nanoTime()}.txt", "opened payload")
+        val intent = Intent(context, MainActivity::class.java).apply {
+            action = Intent.ACTION_VIEW
+            setDataAndType(uriFor(source), "text/plain")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        ActivityScenario.launch<MainActivity>(intent).use { scenario ->
+            waitUntilCopied(scenario)
+            onView(withId(R.id.oldNameText)).check(matches(withText(source.name)))
+            onView(withId(R.id.nameInput)).check(matches(isEnabled()))
+            onView(withId(R.id.sendButton)).check(matches(isEnabled()))
+            onView(withId(R.id.saveButton)).check(matches(isEnabled()))
+        }
+    }
+
+    @Test
+    fun viewIntent_withoutType_stillOpens() {
+        val source = newSource("untyped-${System.nanoTime()}.bin", "untyped payload")
+        val intent = Intent(context, MainActivity::class.java).apply {
+            action = Intent.ACTION_VIEW
+            data = uriFor(source)
+        }
+        ActivityScenario.launch<MainActivity>(intent).use { scenario ->
+            waitUntilCopied(scenario)
+            onView(withId(R.id.oldNameText)).check(matches(withText(source.name)))
+            onView(withId(R.id.sendButton)).check(matches(isEnabled()))
+        }
+    }
+
+    @Test
+    fun viewIntent_ofFolder_fallsBackToPlainText() {
+        val authority = "${context.packageName}.testfolder"
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
+        val intent = Intent(context, MainActivity::class.java).apply {
+            action = Intent.ACTION_VIEW
+            setDataAndType(tree, DocumentsContract.Document.MIME_TYPE_DIR)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        ActivityScenario.launch<MainActivity>(intent).use { scenario ->
+            waitUntilSaveEnabled(scenario)
+            // 和文件夹分享一样：不展开，按纯文本处理这个 URI。
+            onView(withId(R.id.nameInput)).check(matches(isEnabled()))
+            onView(withId(R.id.sendButton)).check(matches(isEnabled()))
+            scenario.onActivity { activity ->
+                val preview = activity.findViewById<TextView>(R.id.oldNameText).text.toString()
+                assertTrue("folder uri should be shown as text: $preview", preview.contains(tree.toString()))
+            }
+        }
+    }
+
+    /**
+     * 直接问 PackageManager：manifest 里的两个 VIEW filter 真的能被隐式请求解析到。
+     * type 缺失的那种请求由只有 content scheme 的那条兜底 filter 接住。
+     */
+    @Test
+    fun viewIntentFilter_resolvesContentUris_andIgnoresWebLinks() {
+        val pm = context.packageManager
+        val typed = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(Uri.parse("content://moe.hellorename.probe/file.txt"), "text/plain")
+        }
+        val untyped = Intent(Intent.ACTION_VIEW).apply {
+            data = Uri.parse("content://moe.hellorename.probe/file.bin")
+        }
+        for (intent in listOf(typed, untyped)) {
+            val resolved = pm.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
+            assertTrue(
+                "ACTION_VIEW ($intent) 应解析到本应用，实际: $resolved",
+                resolved.any { it.activityInfo.packageName == context.packageName },
+            )
+        }
+
+        val web = Intent(Intent.ACTION_VIEW).apply { data = Uri.parse("https://example.com/a") }
+        val webResolved = pm.queryIntentActivities(web, PackageManager.MATCH_DEFAULT_ONLY)
+        assertFalse(
+            "http(s) 链接不应解析到本应用（只声明 MIME 的 filter 不放行 web scheme），实际: $webResolved",
+            webResolved.any { it.activityInfo.packageName == context.packageName },
+        )
     }
 
     @Test

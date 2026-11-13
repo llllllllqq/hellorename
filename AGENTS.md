@@ -9,7 +9,7 @@
 - 包名 `moe.hellorename`（QA 构建会加 `.debug` 后缀，避免和正式包冲突）；应用名 `HelloRename`，中文 `改名助手`。
 - 平台：`minSdk 24`、`compileSdk 36`、`targetSdk 36`；AGP **9.4.1**、Gradle **9.6.0**、Kotlin **2.4.21**、JDK **17**。
 - 单 Activity（`MainActivity`，`launchMode=singleTop`），没有自定义 View、没有 Compose。
-- 入口只有三类：`MAIN/LAUNCHER`、`SEND`、`SEND_MULTIPLE`；模式状态机是 `ShareMode.FILE / MULTI / TEXT / NONE`。
+- 入口有四类：`MAIN/LAUNCHER`、`SEND`、`SEND_MULTIPLE`、`VIEW`（“打开方式”，与单文件分享共用 `loadSource`）；模式状态机是 `ShareMode.FILE / MULTI / TEXT / NONE`。VIEW 用 `*/*` 覆盖任意格式，另有一条只声明 `content` scheme 的兜底 filter 接住没有 MIME 的请求；两者都不能放行 `http(s)`。
 - 目录：`app/src/main/java/moe/hellorename/`（业务代码）、`app/src/debug/`（仅测试用 provider）、`tools/`（体检脚本）、`.github/workflows/`（QA / 模拟器 / 发布）。
 
 ## 2. 硬约束（违反就不要提交）
@@ -79,9 +79,9 @@ HOME=$PWD/.android-user android docs fetch \
   gh run view <run-id> --log | grep -E "构建版本|versionCode|PASS|FAIL"
   ```
 
-- 测试计数：JVM **88** 条、API 36 instrumentation **15** 条。增删测试后同步 README 与 CHANGELOG 里的数字。
+- 测试计数：JVM **88** 条、API 36 instrumentation **19** 条。增删测试后同步 README 与 CHANGELOG 里的数字。
 - **同 UID 陷阱**：`app/src/debug` 的 `TestFolderProvider` 和被测 App 同 UID，`ContentProvider.enforceReadPermissionInner()` 对同 UID 直接放行。所以 instrumentation 绿**不代表**跨应用 URI 授权在真机成立（文件夹分享就是这样：跨应用只给单 URI 授权时必然失败）。涉及跨应用授权的行为，必须真机取证后再下结论。
-- `qa_check.py` 的期望值：包名、versionName、`minSdk 24`、`targetSdk 36`、`MainActivity` exported + 三个 action、`FileProvider` 配置、v2/v3 签名、证书 SHA-256、无残留密钥文件。
+- `qa_check.py` 的期望值：包名、versionName、`minSdk 24`、`targetSdk 36`、`MainActivity` exported + 四个 action（`SEND` / `SEND_MULTIPLE` / `VIEW` / `MAIN`）、`FileProvider` 配置、v2/v3 签名、证书 SHA-256、无残留密钥文件。
 
 ## 6. 发布流程
 
@@ -163,3 +163,5 @@ $HOME/Android/Sdk/build-tools/36.0.0/aapt2 dump badging .verify/v2.0.0/*.apk | h
 - instrumentation 跑完会卸载被测 App：`emulator_ui_check.sh` 里先重装 debug APK 再截图。
 - QA 构建的包名是 `moe.hellorename.debug`，`qa_check.py` 必须带 `--expect-package`，否则误报。
 - 文本模式不要把正文和链接拼在一起，也不要把 CRLF 改成 LF（用户会拿它做逐字节对比）。
+- `ACTION_VIEW` 的 `*/*` filter 匹配不上 MIME 为 null 的 Intent（`IntentFilter.findMimeType(null)` 直接 false），要单独一条只声明 `content` scheme 的 filter 兜底；同一个 `<intent-filter>` 里多个 `<data>` 是“与”关系，不能合并成一条。
+- 只声明 MIME 的 filter 只会匹配 `content:` / `file:`（框架的 Data test 规则 4），`http(s)` 不会被接管；`file://` 能进来但零权限读不了，按“源文件不可用”报错即可。

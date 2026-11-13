@@ -39,6 +39,29 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="*/*" />
             </intent-filter>
+
+            <!--
+                作为“打开方式”接收方：文件管理器/邮件附件/浏览器下载完成的“打开”都用 ACTION_VIEW。
+                只声明 MIME、不声明 scheme 时，框架只放行 content: / file:（见 Intents and intent filters
+                的 Data test 规则 4），所以不会抢 http(s) 链接。
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+
+            <!--
+                MIME 缺失时的兜底：来源没有 setType()、provider 的 getType() 也拿不到类型时，
+                上面 `*/*` 的 filter 匹配不上（IntentFilter.findMimeType(null) 直接返回 false）。
+                这里只声明 content scheme，专门接住这种“只有 URI、没有类型”的打开请求。
+                不能和上面那条合成一条：同一个 intent-filter 里多个 <data> 是“与”的关系。
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+            </intent-filter>
         </activity>
 
         <provider

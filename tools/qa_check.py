@@ -254,6 +254,7 @@ def manifest_checks(aapt2: str, apk: str, expected_authority: str) -> None:
                 categories.add(attr_str(category["attrs"].get("name")))
         for action in ("android.intent.action.SEND", "android.intent.action.SEND_MULTIPLE"):
             check(action in actions, f"注册了 {action.split('.')[-1]} 分享接收")
+        check("android.intent.action.VIEW" in actions, "注册了 VIEW（可作为“打开方式”接收）")
         check("android.intent.action.MAIN" in actions, "注册了 MAIN（可从启动器打开）")
         check("android.intent.category.LAUNCHER" in categories, "注册了 LAUNCHER")
 

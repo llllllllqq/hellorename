@@ -444,6 +444,10 @@ class MainActivity : AppCompatActivity() {
         }
         val action = intent.action
         val isShare = action == Intent.ACTION_SEND || action == Intent.ACTION_SEND_MULTIPLE
+        if (action == Intent.ACTION_VIEW) {
+            handleViewIntent(intent)
+            return
+        }
         if (!isShare) {
             if (action == Intent.ACTION_MAIN) {
                 // 启动器入口：已经加载了内容就不要清空（H1/L6）。
@@ -479,6 +483,30 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * “打开方式”入口（ACTION_VIEW）：文件管理器、邮件附件、浏览器下载完成后的“打开”都会走这里。
+     * 走的是和单文件分享完全相同的一条路——复制到缓存、改名、再发送/保存，源文件不动。
+     *
+     * 只带 URI、连 type 都没有的请求也照收：manifest 里专门有一条只有 content scheme 的兜底 filter，
+     * 因为 `*/*` 的 filter 匹配不上 type 为 null 的 Intent（IntentFilter.findMimeType(null) 直接 false）。
+     * 目录沿用 2.1.0 的既定策略——不展开，按纯文本处理它的 URI。
+     */
+    private fun handleViewIntent(intent: Intent) {
+        val uri = intent.data
+        val forwardIntent = Intent(intent)
+        if (uri == null) {
+            // 没有 data 的 VIEW 不符合平台约定，按未知请求转储，至少能保存/转发
+            loadText(describeIntent(intent), forwardIntent, unknown = true)
+            return
+        }
+        if (isSupportedFileUri(uri)) {
+            loadSource(uri, forwardIntent, intent.type)
+            return
+        }
+        // http(s) 等非文件 URI：不是文件，按纯文本保存这个链接
+        loadText(uri.toString(), forwardIntent)
     }
 
     private fun isSupportedFileUri(uri: Uri): Boolean =
@@ -1940,7 +1968,11 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val forward = Intent(original)
-        if (forward.clipData != null || forward.hasExtra(Intent.EXTRA_STREAM)) {
+        // VIEW 的 URI 在 data 里而不是 EXTRA_STREAM；补同样的读授权，目标应用才读得到。
+        if (forward.clipData != null ||
+            forward.hasExtra(Intent.EXTRA_STREAM) ||
+            forward.data?.scheme == "content"
+        ) {
             forward.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         val chooser = Intent.createChooser(

@@ -2,6 +2,20 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)；每个 `v*` tag 会由 GitHub Actions 自动构建并发布 APK。
 
+## [2.3.0] - 2026-11-13
+
+分享之外再开一个入口：文件管理器、邮件附件、浏览器下载完成后的“打开”也能直接调起本应用。进入后和单文件分享走同一条“复制 → 改名 → 发送/保存”，源文件依旧不动，依旧零权限。
+
+### Added
+- **“打开方式”入口（`ACTION_VIEW`）**：`<data android:mimeType="*/*"/>` 覆盖任意格式的 `content:` / `file:` 请求；另加一条只声明 `content` scheme 的 filter，接住来源没 `setType()`、provider 也拿不到 MIME 的请求（框架的 `*/*` filter 匹配不上 type 为 null 的 Intent）。只声明 MIME 的 filter 不会匹配 `http(s)`，浏览器链接不会被接管。
+- **共用加载路径**：VIEW 直接复用 `loadSource`，文件名 / MIME / 扩展名锁定 / 校验值 / 保存重名规则与分享完全一致；目录沿用 2.1.0 的策略按纯文本处理、不展开。文本兜底的“发送”原样转发来源 VIEW 请求，并给 `data` 里的 `content://` 补 `FLAG_GRANT_READ_URI_PERMISSION`。
+- **instrumentation**：新增 4 条 API 36 用例（`viewIntent_copiesFileLikeShare`、`viewIntent_withoutType_stillOpens`、`viewIntent_ofFolder_fallsBackToPlainText`、`viewIntentFilter_resolvesContentUris_andIgnoresWebLinks`），模拟器门禁共 **19 条**。
+- **`qa_check.py`**：新增 `VIEW` action 断言，防止后续改动把入口删掉。
+
+### Changed
+- **版本号**：`versionName` 2.3.0，`versionCode` 最低 18（覆盖 v2.2.0 的 17）。
+- **已知限制**：`file://` 裸路径能进来但零权限读不了，界面会提示“源文件不可用”，这类来源请改用文件管理器里的分享。
+
 ## [2.2.0] - 2026-11-07
 
 标题栏右上角加了一个垃圾桶：手动强制清空缓存，只留下当前正在用的那一份。Windows/Android 设置里的“清除缓存”语义，只是这个应用自己实现，不依赖系统。

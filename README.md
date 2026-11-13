@@ -17,7 +17,7 @@ Android 系统分享面板本身没有“改名后再分享”的能力：接收
 
 HelloRename 就是干这件事的：
 
-1. 出现在系统分享面板里，接收任意类型的文件（`ACTION_SEND` / `ACTION_SEND_MULTIPLE`）。
+1. 出现在系统分享面板里，接收任意类型的文件（`ACTION_SEND` / `ACTION_SEND_MULTIPLE`），也出现在文件管理器/邮件附件的“打开方式”里（`ACTION_VIEW`）。
 2. 上半部分显示**旧文件名.扩展名**（可长按复制）。
 3. 下半部分是一个**自动换行的大输入框**，直接改新文件名。
 4. **扩展名默认锁定，且不显示在输入框里**（连灰色后缀也不放，由输入框下方的提示行写明保留的扩展名）；勾选最底部的“允许修改扩展名”后，扩展名才拼进输入框一起编辑。
@@ -32,6 +32,7 @@ HelloRename 就是干这件事的：
 13. **纯文本 / 不支持的链接分享**：默认文件名是本地时区的 `YYYYMMDD_hhmmss`（精确到秒），可改名；保存为 **UTF-8、无 BOM** 的 `.txt`，原有 CRLF/CR/LF 不改写。“发送”不生成文件，而是把来源 Intent 原样转发到系统分享面板。
 14. **未知请求兜底**：既没有可读文件、也没有可识别文本的分享/未知调用，会把原始 Intent 转储成 `.txt`（`Intent.toUri(URI_INTENT_SCHEME)`，并附 action/type/data/extras 摘要）；“发送”同样原样转发来源请求。
 15. **手动清空缓存**：标题栏右上角的垃圾桶按钮会二次确认后强制清空 `cacheDir/shared/` 与 `cacheDir/shared-state/`，只保留当前正在使用的会话；清理在 IO 线程执行，完成后 Toast 报告释放的字节数。
+16. **“打开方式”入口**：除了分享面板，文件管理器、邮件附件、浏览器下载完成后的“打开”也能直接调起本应用（`ACTION_VIEW`；`*/*` 覆盖任意格式，另有一条只声明 `content` scheme 的兜底 filter 接住没有 MIME 的请求）。进入后和单文件分享走同一条“复制 → 改名 → 发送/保存”流程，源文件不动；只声明 MIME 的 filter 不会匹配 `http(s)`，不会抢浏览器链接。
 
 ## 设计取舍（为什么这么实现）
 
@@ -155,7 +156,7 @@ gradle assembleRelease                               # 或 ./gradlew assembleRel
 
 ```bash
 gradle test                    # 88 条 JVM 单测（文件名/缓存/流复制/操作代际/校验值/时间戳）
-gradle connectedDebugAndroidTest   # 需要模拟器或真机；API 36 门禁
+gradle connectedDebugAndroidTest   # 需要模拟器或真机；API 36 门禁，19 条 instrumentation
 ```
 
 ## 隐私
@@ -168,6 +169,8 @@ gradle connectedDebugAndroidTest   # 需要模拟器或真机；API 36 门禁
 - 改扩展名会同时改变对外声明的 MIME type，部分 App 会因此拒收（界面有提示）。
 - 多文件只允许保存，不能改名或发送；文件名保持原样（仅做非法字符/长度清洗）。
 - 文件夹分享不读取内容：`ACTION_SEND` 默认只授予那一个 URI，子项是另外的 URI，跨应用拿不到（需要 `FLAG_GRANT_PREFIX_URI_PERMISSION` 或 SAF 树授权）。应用不申请存储权限、也不绕过 Provider，所以统一把文件夹的 URI/路径当纯文本保存/转发；要传内容请多选文件或先打包。
+- “打开方式”收到的 `file://` 裸路径能进来但读不了：本应用没有存储权限，`/sdcard` 下的路径会被系统拒绝，界面会报“源文件不可用”。这类来源请改用文件管理器里的分享（`content://`）。
+- 只声明 MIME 的 `ACTION_VIEW` filter 只放行 `content:` / `file:`，`http(s)` 链接不会被本应用接管（浏览器里点链接不会弹到改名助手）。
 - 多文件保存到 `Download/` 根；不再保留来源的目录层级（文件夹本身已经不展开）。
 - 纯文本/链接保存的是文本本身（`.txt`），不会抓取或下载链接指向的网页/文件；文本换行按原样写入，未知请求转储使用 LF。
 - 未知请求的原始转储可能包含原 Intent 的 extras，保存前请确认内容。
