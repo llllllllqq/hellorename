@@ -171,7 +171,9 @@ gradle connectedDebugAndroidTest   # 需要模拟器或真机；API 36 门禁，
 - 文件夹分享不读取内容：`ACTION_SEND` 默认只授予那一个 URI，子项是另外的 URI，跨应用拿不到（需要 `FLAG_GRANT_PREFIX_URI_PERMISSION` 或 SAF 树授权）。应用不申请存储权限、也不绕过 Provider，所以统一把文件夹的 URI/路径当纯文本保存/转发；要传内容请多选文件或先打包。
 - “打开方式”收到的 `file://` 裸路径能进来但读不了：本应用没有存储权限，`/sdcard` 下的路径会被系统拒绝，界面会报“源文件不可用”。这类来源请改用文件管理器里的分享（`content://`）。
 - 只声明 MIME 的 `ACTION_VIEW` filter 只放行 `content:` / `file:`，`http(s)` 链接不会被本应用接管（浏览器里点链接不会弹到改名助手）。
-- HyperOS / MIUI 的“打开方式”是小米自己实现的（`com.android.internal.app.MiuiResolverActivity`），会把候选分成“推荐选项 / 其他选项”并按使用频率排序；在那里看不到本应用时，往下翻到“其他选项”，或者把本应用设为默认打开方式。这是 OEM 的 UI 行为，不是 manifest 少声明了什么——可以用 `adb shell pm query-activities ...` 确认本应用确实在系统候选里。
+- **有些应用会把“打开文件”做成自带初始 Intent 的 chooser，而 HyperOS 的分享面板只渲染少数槽位**：例如 WorkBuddy 的 `openFileExternally` 会给每个候选应用各造一条显式 `ACTION_VIEW`，把第一个设为 chooser 的 base intent、其余塞进 `EXTRA_INITIAL_INTENTS`；HyperOS 的 `com.android.intentresolver`（MIUI 的 `ChooserActivityStubImpl`）只铺开前几个槽位，安装较晚的第三方应用就永远不出现。这不是本应用少声明了什么——`cmd package query-activities` 能证明我们在候选列表里，而且卸载一个已展示的应用后，后面排着的应用会补位。manifest 侧改不了：第三方应用的 intent-filter `priority` 被 AOSP 封顶为 0（`ComponentResolver.adjustPriority`）。
+- **绕过办法**：把本应用设为该文件类型的**默认打开方式**（系统“打开方式”面板里选本应用后点「始终」，或在文件管理里打开一次同类文件）。这类应用在 `resolveActivity()` 命中默认应用时会直接启动它、不再弹面板；系统自带的“打开方式 / 分享”面板本来就会列出本应用。
+- HyperOS / MIUI 自己的“打开方式”界面（`com.android.internal.app.MiuiResolverActivity`）会把候选分成“推荐选项 / 其他选项”并按使用频率排序；在那里看不到本应用时，往下翻到“其他选项”，或者把本应用设为默认打开方式。这是 OEM 的 UI 行为，不是 manifest 少声明了什么——可以用 `adb shell cmd package query-activities ...` 确认本应用确实在系统候选里。
 - 多文件保存到 `Download/` 根；不再保留来源的目录层级（文件夹本身已经不展开）。
 - 纯文本/链接保存的是文本本身（`.txt`），不会抓取或下载链接指向的网页/文件；文本换行按原样写入，未知请求转储使用 LF。
 - 未知请求的原始转储可能包含原 Intent 的 extras，保存前请确认内容。
