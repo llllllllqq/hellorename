@@ -32,6 +32,9 @@ EXPECTED_PROVIDER = "androidx.core.content.FileProvider"
 # ContextCompat.registerReceiver(RECEIVER_NOT_EXPORTED)；它不向任何外部应用授权，
 # 也不会出现在安装界面的权限列表里，因此是有意保留的。
 SELF_PERMISSION_SUFFIX = ".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+SAVECOPY_MIME_FAMILIES = ("application", "audio", "font", "image", "model", "text", "video")
+VIEW_SHAPE_WILDCARD = "wildcard"
+VIEW_SHAPE_SAVECOPY = "savecopy"
 FORBIDDEN_ENTRIES = re.compile(
     r"(^|/)(keystore\.properties|local\.properties)$|\.(jks|keystore|p12|pepk)$"
 )
@@ -194,7 +197,46 @@ def find_children(node: dict, tag: str) -> list[dict]:
     return [c for c in node.get("children", []) if c["tag"] == tag]
 
 
-def manifest_checks(aapt2: str, apk: str, expected_authority: str) -> None:
+def view_shape_checks(view_filters: list[dict], shape: str) -> None:
+    """VIEW 入口的两种形状：正式版用 wildcard（三条 filter，含 */* 和 null type 兜底），
+    beta 分支用 savecopy（一条 filter，7 类 MIME + 显式 content scheme）。"""
+    if shape == VIEW_SHAPE_SAVECOPY:
+        expected_pairs = {(f"{family}/*", "content") for family in SAVECOPY_MIME_FAMILIES}
+        pairs = {
+            (
+                attr_str(d["attrs"].get("mimeType")),
+                attr_str(d["attrs"].get("scheme")),
+            )
+            for f in view_filters
+            for d in find_children(f, "data")
+        }
+        check(
+            len(view_filters) == 1,
+            "VIEW 只有一条 intent-filter（SaveCopy 形状）",
+            f"实际 {len(view_filters)} 条",
+        )
+        check(
+            pairs == expected_pairs,
+            "VIEW 的 <data> 恰好是 SaveCopy 的 7 类 MIME + content scheme（无 */*、无 null type 兜底）",
+            f"实际 {sorted(pairs)}",
+        )
+        return
+
+    typed_content = any(
+        any(
+            attr_str(d["attrs"].get("scheme")) == "content"
+            and attr_str(d["attrs"].get("mimeType")) == "*/*"
+            for d in find_children(f, "data")
+        )
+        for f in view_filters
+    )
+    check(
+        typed_content,
+        "VIEW 显式声明 content scheme + */*（不依赖框架的隐式 content/file 推断）",
+    )
+
+
+def manifest_checks(aapt2: str, apk: str, expected_authority: str, view_shape: str) -> None:
     tree = manifest_tree(aapt2, apk)
     if tree is None:
         return
@@ -262,18 +304,7 @@ def manifest_checks(aapt2: str, apk: str, expected_authority: str) -> None:
                 for a in find_children(f, "action")
             )
         ]
-        typed_content = any(
-            any(
-                attr_str(d["attrs"].get("scheme")) == "content"
-                and attr_str(d["attrs"].get("mimeType")) == "*/*"
-                for d in find_children(f, "data")
-            )
-            for f in view_filters
-        )
-        check(
-            typed_content,
-            "VIEW 显式声明 content scheme + */*（不依赖框架的隐式 content/file 推断）",
-        )
+        view_shape_checks(view_filters, view_shape)
         check("android.intent.action.MAIN" in actions, "注册了 MAIN（可从启动器打开）")
         check("android.intent.category.LAUNCHER" in categories, "注册了 LAUNCHER")
 
@@ -464,6 +495,12 @@ def main() -> int:
     parser.add_argument("--expect-package", default=EXPECTED_PACKAGE)
     parser.add_argument("--expect-cert-sha256", default=None)
     parser.add_argument("--expect-version-name", default=None)
+    parser.add_argument(
+        "--view-shape",
+        choices=(VIEW_SHAPE_WILDCARD, VIEW_SHAPE_SAVECOPY),
+        default=VIEW_SHAPE_WILDCARD,
+        help="VIEW 入口的预期形状：wildcard = 正式版三条 filter；savecopy = beta 分支的单条 7 类 MIME",
+    )
     parser.add_argument("--allow-debug-cert", action="store_true")
     parser.add_argument("--summary-file", default=None)
     args = parser.parse_args()
@@ -490,7 +527,7 @@ def main() -> int:
     aapt2 = tool(build_tools, "aapt2")
     if aapt2:
         badging_checks(aapt2, args.apk, args.expect_version_name, args.expect_package)
-        manifest_checks(aapt2, args.apk, expected_authority)
+        manifest_checks(aapt2, args.apk, expected_authority, args.view_shape)
     else:
         add(WARN, "未找到 aapt2", "跳过 manifest / badging 检查")
 

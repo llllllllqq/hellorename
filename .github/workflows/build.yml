@@ -1,5 +1,8 @@
 name: Release APK
 
+# beta 分支（长期存在）复用本 workflow：release 包的 applicationId 由
+# app/build.gradle.kts 固定加 .beta 后缀，tag 形如 v2.4.0-beta.1，发布为 prerelease。
+
 on:
   push:
     tags: [ 'v*' ]
@@ -69,9 +72,10 @@ jobs:
           else
             NAME="0.0.1-dev.${GITHUB_RUN_NUMBER}"
           fi
-          # v1.4.0/12、v1.5.0/13、v1.6.0/14、v2.0.0/15、v2.1.0/16、v2.2.0/17、v2.3.0/18；v2.3.1 必须能覆盖安装。
+          # v1.4.0/12、v1.5.0/13、v1.6.0/14、v2.0.0/15、v2.1.0/16、v2.2.0/17、v2.3.0/18、v2.3.1/19；
+          # beta 分支从 v2.4.0-beta.1/20 起（包名不同，versionCode 与正式版互不影响）。
           CODE="${GITHUB_RUN_NUMBER}"
-          if [ "$CODE" -lt 19 ]; then CODE=19; fi
+          if [ "$CODE" -lt 20 ]; then CODE=20; fi
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
           echo "构建版本: $NAME (versionCode=$CODE)"
@@ -102,8 +106,10 @@ jobs:
       - name: QA check APK
         run: |
           python3 tools/qa_check.py "${{ steps.collect.outputs.apk }}" \
+            --expect-package moe.hellorename.beta \
             --expect-version-name "${{ steps.version.outputs.name }}" \
             --expect-cert-sha256 "${{ steps.keystore.outputs.cert }}" \
+            --view-shape savecopy \
             --summary-file "$GITHUB_STEP_SUMMARY"
 
       - name: Upload APK artifact
@@ -133,10 +139,17 @@ jobs:
             echo
             echo '校验安装包完整性: `sha256sum -c SHA256SUMS.txt`'
           } > "$RUNNER_TEMP/release-notes.md"
+          # beta 分支的 tag 形如 v2.4.0-beta.1：带“-”的一律标成 prerelease，
+          # 避免抢走 GitHub 的 Latest
+          PRERELEASE=""
+          case "$TAG" in
+            *-*) PRERELEASE="--prerelease" ;;
+          esac
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/*.apk dist/SHA256SUMS.txt --clobber
           else
             gh release create "$TAG" dist/*.apk dist/SHA256SUMS.txt \
               --title "$TAG" \
+              $PRERELEASE \
               --notes-file "$RUNNER_TEMP/release-notes.md"
           fi

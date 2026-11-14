@@ -32,7 +32,7 @@ HelloRename 就是干这件事的：
 13. **纯文本 / 不支持的链接分享**：默认文件名是本地时区的 `YYYYMMDD_hhmmss`（精确到秒），可改名；保存为 **UTF-8、无 BOM** 的 `.txt`，原有 CRLF/CR/LF 不改写。“发送”不生成文件，而是把来源 Intent 原样转发到系统分享面板。
 14. **未知请求兜底**：既没有可读文件、也没有可识别文本的分享/未知调用，会把原始 Intent 转储成 `.txt`（`Intent.toUri(URI_INTENT_SCHEME)`，并附 action/type/data/extras 摘要）；“发送”同样原样转发来源请求。
 15. **手动清空缓存**：标题栏右上角的垃圾桶按钮会二次确认后强制清空 `cacheDir/shared/` 与 `cacheDir/shared-state/`，只保留当前正在使用的会话；清理在 IO 线程执行，完成后 Toast 报告释放的字节数。
-16. **“打开方式”入口**：除了分享面板，文件管理器、邮件附件、浏览器下载完成后的“打开”也能直接调起本应用（`ACTION_VIEW`；`*/*` 覆盖任意格式，另有一条只声明 `content` scheme 的兜底 filter 接住没有 MIME 的请求）。进入后和单文件分享走同一条“复制 → 改名 → 发送/保存”流程，源文件不动；只声明 MIME 的 filter 不会匹配 `http(s)`，不会抢浏览器链接。
+16. **“打开方式”入口**：除了分享面板，文件管理器、邮件附件、浏览器下载完成后的“打开”也能直接调起本应用（`ACTION_VIEW`）。进入后和单文件分享走同一条“复制 → 改名 → 发送/保存”流程，源文件不动；只声明 MIME 的 filter 不会匹配 `http(s)`，不会抢浏览器链接。**注意：这是 `beta` 分支，入口形状与正式版不同，见下方「Beta 分支」。**
 
 ## 设计取舍（为什么这么实现）
 
@@ -88,7 +88,7 @@ HelloRename 就是干这件事的：
 
 ### 云端（推荐，本仓库就是这么发的包）
 
-- 推到 `main` / 开 PR → `QA` workflow：单元测试 → Lint 门禁 → 构建 release APK → APK 出厂体检；同时并行跑云端模拟器 UI 验证。QA 产物带 `.debug` 包名后缀（`moe.hellorename.debug`），可以和正式包同时装在手机上。
+- 推到 `main` / `beta` / 开 PR → `QA` workflow：单元测试 → Lint 门禁 → 构建 release APK → APK 出厂体检；同时并行跑云端模拟器 UI 验证。QA 产物的包名随分支不同：`main` 是 `moe.hellorename.debug`，`beta` 是 `moe.hellorename.beta`。
 - 打 `v*` tag → `Release APK` workflow：**先跑云端模拟器 UI 验证** → 要求签名 Secrets → 构建 → 体检 → 创建 Release（附 APK 与 `SHA256SUMS.txt`，说明自动取自 `CHANGELOG.md`）。
 
 ### 云端模拟器验证（发布前硬门槛）
@@ -104,10 +104,11 @@ Release workflow 的 `release` job 通过 `needs: emulator-verify` 依赖这项�
 
 每次 CI 都会对产出的 APK 做一遍硬性检查，任何一项失败就不发版：
 
-- 包名 `moe.hellorename`、版本号与 tag 一致、`minSdk 24`、`targetSdk 36`
+- 包名（正式版 `moe.hellorename`；beta 分支为 `moe.hellorename.beta`）、版本号与 tag 一致、`minSdk 24`、`targetSdk 36`
 - 除了 androidx 自用的 `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`（`signature` 级、不向外部应用授权）外**没有任何权限**，一旦多出 `INTERNET`/存储之类就失败
 - `application-debuggable` 不存在
 - `MainActivity` `exported=true`，注册了 `MAIN/LAUNCHER`、`SEND`、`SEND_MULTIPLE`，`launchMode=singleTop`
+- VIEW 入口形状符合当前分支的 profile：`--view-shape wildcard`（正式版，三条 filter）或 `--view-shape savecopy`（beta 分支，单条 7 类 MIME + `content` scheme）
 - `FileProvider` `exported=false` + `grantUriPermissions=true` + authority 与 `file_paths.xml` 到位
 - APK Signature v2 / v3 校验通过，且证书 SHA-256 等于发布密钥（不是 Android Debug 证书）
 - APK 内不得残留 `*.jks / keystore.properties / local.properties`
@@ -159,6 +160,16 @@ gradle test                    # 88 条 JVM 单测（文件名/缓存/流复制/
 gradle connectedDebugAndroidTest   # 需要模拟器或真机；API 36 门禁，20 条 instrumentation
 ```
 
+## Beta 分支
+
+`beta` 是长期存在的测试分支，用来做 manifest / 入口类实验。`main` 的新功能可以合入 `beta`；反过来，`beta` 的包名与实验性 manifest 改动不要带回 `main`，正式版不受影响。
+
+- **包名**：本分支所有变体（含 debug）都带 `.beta` 后缀（`app/build.gradle.kts` 里 `appIdSuffix` 的默认值），可以和正式版 `moe.hellorename` 同时安装。
+- **签名**：仍是发布密钥（同一套 Secrets），`.beta` 包与正式包的证书 SHA-256 一致，便于对比安装与取证。
+- **版本**：`versionName` 形如 `2.4.0-beta.1`，tag 形如 `v2.4.0-beta.1`；Release 页标成 prerelease，不会抢 Latest。
+- **本轮实验（2.4.0-beta.1）**：“打开方式”入口完全照搬 [SaveCopy](https://github.com/RikkaApps/SaveCopy)——删掉正式版的三条 VIEW filter（`content` + `*/*`、只写 `*/*`、只写 `content` 兜底 null type），只留一条 7 类 MIME（`application/*`、`audio/*`、`font/*`、`image/*`、`model/*`、`text/*`、`video/*`）且每条都显式带 `android:scheme="content"` 的 filter。
+- **门禁**：本分支的 QA / Release 用 `--view-shape savecopy` 断言 VIEW 只有这一条 filter；正式版继续用默认的 `wildcard`。
+
 ## 隐私
 
 - 没有网络代码，也没有申请任何系统权限（`INTERNET`、存储、悬浮窗等一概没有）。APK 里只剩 androidx 自带的 `moe.hellorename.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`，它是 `signature` 级的应用内自用权限，不会授予外部应用，也不出现在安装权限列表里。
@@ -169,8 +180,8 @@ gradle connectedDebugAndroidTest   # 需要模拟器或真机；API 36 门禁，
 - 改扩展名会同时改变对外声明的 MIME type，部分 App 会因此拒收（界面有提示）。
 - 多文件只允许保存，不能改名或发送；文件名保持原样（仅做非法字符/长度清洗）。
 - 文件夹分享不读取内容：`ACTION_SEND` 默认只授予那一个 URI，子项是另外的 URI，跨应用拿不到（需要 `FLAG_GRANT_PREFIX_URI_PERMISSION` 或 SAF 树授权）。应用不申请存储权限、也不绕过 Provider，所以统一把文件夹的 URI/路径当纯文本保存/转发；要传内容请多选文件或先打包。
-- “打开方式”收到的 `file://` 裸路径能进来但读不了：本应用没有存储权限，`/sdcard` 下的路径会被系统拒绝，界面会报“源文件不可用”。这类来源请改用文件管理器里的分享（`content://`）。
-- 只声明 MIME 的 `ACTION_VIEW` filter 只放行 `content:` / `file:`，`http(s)` 链接不会被本应用接管（浏览器里点链接不会弹到改名助手）。
+- 本 beta 分支的 `ACTION_VIEW` 显式声明了 `content` scheme，只覆盖 7 类 MIME 的 `content:` 请求：没有 MIME 的打开请求、`file://` 路径和 `http(s)` 链接都不会出现本应用（正式版另有 `*/*` 与 null type 兜底）。这是 2.4.0-beta 系列的对照实验，不是回归。
+- `file://` 裸路径即使能进来也读不了：本应用没有存储权限，`/sdcard` 下的路径会被系统拒绝，界面会报“源文件不可用”。这类来源请改用文件管理器里的分享（`content://`）。
 - HyperOS / MIUI 的“打开方式”是小米自己实现的（`com.android.internal.app.MiuiResolverActivity`），会把候选分成“推荐选项 / 其他选项”并按使用频率排序；在那里看不到本应用时，往下翻到“其他选项”，或者把本应用设为默认打开方式。这是 OEM 的 UI 行为，不是 manifest 少声明了什么——可以用 `adb shell pm query-activities ...` 确认本应用确实在系统候选里。
 - 多文件保存到 `Download/` 根；不再保留来源的目录层级（文件夹本身已经不展开）。
 - 纯文本/链接保存的是文本本身（`.txt`），不会抓取或下载链接指向的网页/文件；文本换行按原样写入，未知请求转储使用 LF。

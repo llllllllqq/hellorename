@@ -246,30 +246,46 @@ class MainActivityFlowTest {
     }
 
     /**
-     * 直接问 PackageManager：manifest 里的两个 VIEW filter 真的能被隐式请求解析到。
-     * type 缺失的那种请求由只有 content scheme 的那条兜底 filter 接住。
+     * 直接问 PackageManager：beta 分支的 VIEW filter（SaveCopy 形状：7 类 MIME + 显式 content scheme）
+     * 真的能被隐式请求解析到；https 和无 MIME 的 content 请求都解析不到。
      */
     @Test
     fun viewIntentFilter_resolvesContentUris_andIgnoresWebLinks() {
         val pm = context.packageManager
-        val typed = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(Uri.parse("content://moe.hellorename.probe/file.txt"), "text/plain")
-        }
-        val untyped = Intent(Intent.ACTION_VIEW).apply {
-            data = Uri.parse("content://moe.hellorename.probe/file.bin")
-        }
-        for (intent in listOf(typed, untyped)) {
+        val types = listOf(
+            "application/pdf",
+            "audio/mpeg",
+            "font/ttf",
+            "image/png",
+            "model/gltf-binary",
+            "text/plain",
+            "video/mp4",
+        )
+        for (type in types) {
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(Uri.parse("content://moe.hellorename.probe/file"), type)
+            }
             val resolved = pm.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
             assertTrue(
-                "ACTION_VIEW ($intent) 应解析到本应用，实际: $resolved",
+                "ACTION_VIEW ($type) 应解析到本应用，实际: $resolved",
                 resolved.any { it.activityInfo.packageName == context.packageName },
             )
         }
 
+        // 对照组有意删掉了“只声明 content scheme”的兜底：没有 MIME 的打开请求不会出现本应用。
+        val untyped = Intent(Intent.ACTION_VIEW).apply {
+            data = Uri.parse("content://moe.hellorename.probe/file.bin")
+        }
+        val untypedResolved = pm.queryIntentActivities(untyped, PackageManager.MATCH_DEFAULT_ONLY)
+        assertFalse(
+            "无 MIME 的 VIEW 不应解析到本应用（beta 分支的已知代价），实际: $untypedResolved",
+            untypedResolved.any { it.activityInfo.packageName == context.packageName },
+        )
+
         val web = Intent(Intent.ACTION_VIEW).apply { data = Uri.parse("https://example.com/a") }
         val webResolved = pm.queryIntentActivities(web, PackageManager.MATCH_DEFAULT_ONLY)
         assertFalse(
-            "http(s) 链接不应解析到本应用（只声明 MIME 的 filter 不放行 web scheme），实际: $webResolved",
+            "http(s) 链接不应解析到本应用（VIEW 只声明 content scheme），实际: $webResolved",
             webResolved.any { it.activityInfo.packageName == context.packageName },
         )
     }

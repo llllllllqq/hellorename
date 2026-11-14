@@ -41,41 +41,38 @@
             </intent-filter>
 
             <!--
-                作为“打开方式”接收方：文件管理器/邮件附件/浏览器下载完成的“打开”都用 ACTION_VIEW。
-                这一条把 content scheme 和任意 MIME 都显式写出来：框架本来就会把“只声明 MIME”的 filter
-                视为支持 content:/file:（见 Intents and intent filters 的 Data test 规则 4），
-                但 HyperOS/MIUI 的 MiuiResolverActivity 这类 OEM 解析器会自己再算一遍候选列表；
-                显式声明不改变框架语义，只是把“OEM 漏掉隐式规则”这个变量降到最低。
-                显式 content scheme 也保证不会抢 http(s) 链接。
+                “打开方式”入口：beta 分支的对照组，形状与 SaveCopy 完全一致。
+                7 类 MIME 各自显式带 content scheme，全部装在一个 intent-filter 里。
+                与正式版的三条 filter 相比，这里有意少了两件事：
+                  - 没有 */*（不再匹配 message/*、multipart/* 等其余类型族）；
+                  - 没有“只声明 content scheme”的兜底（MIME 为 null 的请求接不住）。
+                file: 也不在匹配范围内。这三点正是本轮要验证的变量，
+                实验结束前不要顺手补回来，否则对照组就失去意义。
             -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data
-                    android:mimeType="*/*"
+                    android:mimeType="application/*"
                     android:scheme="content" />
-            </intent-filter>
-
-            <!--
-                上面那条只覆盖 content:。这条不写 scheme，按框架规则还能接住 file: 和“没有 data URI”的 VIEW；
-                保留它是为了不退化成比 2.3.0 更窄的匹配面。
-            -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="*/*" />
-            </intent-filter>
-
-            <!--
-                MIME 缺失时的兜底：来源没有 setType()、provider 的 getType() 也拿不到类型时，
-                上面两条都匹配不上（IntentFilter.findMimeType(null) 直接返回 false）。
-                这里只声明 content scheme，专门接住这种“只有 URI、没有类型”的打开请求。
-                不能和上面两条合成一条：同一个 intent-filter 里多个 <data> 是“与”的关系。
-            -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:scheme="content" />
+                <data
+                    android:mimeType="audio/*"
+                    android:scheme="content" />
+                <data
+                    android:mimeType="font/*"
+                    android:scheme="content" />
+                <data
+                    android:mimeType="image/*"
+                    android:scheme="content" />
+                <data
+                    android:mimeType="model/*"
+                    android:scheme="content" />
+                <data
+                    android:mimeType="text/*"
+                    android:scheme="content" />
+                <data
+                    android:mimeType="video/*"
+                    android:scheme="content" />
             </intent-filter>
         </activity>
 

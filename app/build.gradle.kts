@@ -31,10 +31,13 @@ val hasReleaseSigning = sigStoreFile != null && sigStorePassword != null &&
     sigKeyAlias != null && sigKeyPassword != null
 
 // 版本号 / applicationId 可由 CI 覆盖：
-//   -PversionName=1.2.3 -PversionCode=42 [-PapplicationIdSuffix=.debug]
-val appVersionName = (project.findProperty("versionName") as String?)?.takeIf { it.isNotBlank() } ?: "2.3.1"
-val appVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 19
-val appIdSuffix = (project.findProperty("applicationIdSuffix") as String?)?.takeIf { it.isNotBlank() } ?: ""
+//   -PversionName=1.2.3 -PversionCode=42 [-PapplicationIdSuffix=…]
+// beta 分支（长期存在）：默认包名就带 .beta 后缀（release / debug 一致），与正式版并存；
+// 这里的默认值只是给本地 `gradle assembleRelease` 兜底，CI 会用 -PversionName/-PversionCode 覆盖。
+val appVersionName = (project.findProperty("versionName") as String?)?.takeIf { it.isNotBlank() } ?: "2.4.0-beta.1"
+val appVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 20
+// beta 分支：整条分支的包名都带 .beta（debug 一并带上，避免误装成正式包）。
+val appIdSuffix = (project.findProperty("applicationIdSuffix") as String?)?.takeIf { it.isNotBlank() } ?: ".beta"
 
 android {
     namespace = "moe.hellorename"
@@ -69,6 +72,7 @@ android {
 
     buildTypes {
         release {
+            // 签名沿用发布证书：.beta 包和正式包的证书一致，可以放心做覆盖/对比安装。
             // AGP 9.3+ 的新优化 DSL：保持当前“不混淆、不 shrink”的行为，升级与优化分开做。
             optimization {
                 enable = false

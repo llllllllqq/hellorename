@@ -13,7 +13,8 @@ gradle --no-daemon --stacktrace connectedDebugAndroidTest
 
 ROOT="${GITHUB_WORKSPACE:-$(pwd)}"
 OUT="$ROOT/app/build/reports/ui"
-APP_ID="moe.hellorename"
+# beta 分支的 debug 变体也带 .beta 后缀（app/build.gradle.kts 的默认 appIdSuffix）
+APP_ID="moe.hellorename.beta"
 ACTIVITY="$APP_ID/.MainActivity"
 DEBUG_APK="$ROOT/app/build/outputs/apk/debug/app-debug.apk"
 

@@ -2,6 +2,23 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)；每个 `v*` tag 会由 GitHub Actions 自动构建并发布 APK。
 
+## [2.4.0-beta.1] - 2026-11-14
+
+长期 `beta` 分支的第一版，只做对照实验：包名加 `.beta` 后缀与正式版并存，签名仍是发布密钥；“打开方式”入口改成 SaveCopy 的形状，用来验证 HyperOS 的候选列表到底看什么。
+
+### Changed
+- **VIEW 入口照搬 SaveCopy**：删掉本应用原有的三条 VIEW filter（`content` + `*/*`、只写 `*/*`、只写 `content` 兜底 null type），只留一条与 SaveCopy 相同的 filter：`application/*`、`audio/*`、`font/*`、`image/*`、`model/*`、`text/*`、`video/*` 七个 `<data>`，每个都显式带 `android:scheme="content"`。
+- **包名**：`appIdSuffix` 默认值改为 `.beta`，release / debug 都是 `moe.hellorename.beta`（正式版 `moe.hellorename` 不受影响）；签名仍走发布证书，证书 SHA-256 与正式版一致。
+- **版本号**：`versionName` 2.4.0-beta.1，`versionCode` 最低 20；tag `v2.4.0-beta.1` 会被发布成 prerelease，不抢 Latest。
+- **QA 门禁**：`qa_check.py` 新增 `--view-shape {wildcard,savecopy}`；本分支的 QA / Release 都用 `savecopy`，断言 VIEW 只有一条 filter、恰好 7 个 `<data>`、每个都是“某类 MIME + content scheme”，`*/*` 和 null type 兜底都不允许回来。
+
+### Testing
+- `viewIntentFilter_resolvesContentUris_andIgnoresWebLinks` 改为断言 7 类 MIME 的 `content:` 请求都能解析到本应用；**无 MIME** 的 `content:` 请求与 `https` 链接都不解析（前者是本轮实验的已知代价）。
+- JVM 88 条不变；API 36 instrumentation 仍 20 条。
+
+### Known
+- 本分支的“打开方式”接不住没有 MIME 的请求，也不匹配 `file:`；正式版仍有这两条兜底。这是对照组，不是回归。
+
 ## [2.3.1] - 2026-11-13
 
 防御性小版本：把“打开方式”的 `content` scheme 显式写进 manifest，不改变框架语义，只是不再依赖框架的隐式推断。

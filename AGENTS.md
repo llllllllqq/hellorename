@@ -6,11 +6,20 @@
 
 ## 1. 项目事实
 
-- 包名 `moe.hellorename`（QA 构建会加 `.debug` 后缀，避免和正式包冲突）；应用名 `HelloRename`，中文 `改名助手`。
+- 包名 `moe.hellorename`（`main` 正式版；QA 构建会加 `.debug` 后缀，避免和正式包冲突）；应用名 `HelloRename`，中文 `改名助手`。另有长期存在的 `beta` 分支，包名统一带 `.beta` 后缀，见 §1.1。
 - 平台：`minSdk 24`、`compileSdk 36`、`targetSdk 36`；AGP **9.4.1**、Gradle **9.6.0**、Kotlin **2.4.21**、JDK **17**。
 - 单 Activity（`MainActivity`，`launchMode=singleTop`），没有自定义 View、没有 Compose。
-- 入口有四类：`MAIN/LAUNCHER`、`SEND`、`SEND_MULTIPLE`、`VIEW`（“打开方式”，与单文件分享共用 `loadSource`）；模式状态机是 `ShareMode.FILE / MULTI / TEXT / NONE`。VIEW 有三条 filter：显式 `content` scheme + `*/*`、只写 `*/*`（保留 file:/无 data 的匹配）、只写 `content` scheme 兜底 null type；都不能放行 `http(s)`。SEND 的 filter 绝不能带 scheme。
+- 入口有四类：`MAIN/LAUNCHER`、`SEND`、`SEND_MULTIPLE`、`VIEW`（“打开方式”，与单文件分享共用 `loadSource`）；模式状态机是 `ShareMode.FILE / MULTI / TEXT / NONE`。VIEW 的形状随分支：`main` 三条 filter（显式 `content` scheme + `*/*`、只写 `*/*`、只写 `content` 兜底 null type），`beta` 只有一条 SaveCopy 形状（7 类 MIME + `content` scheme，无 `*/*`、无 null type 兜底）；都不能放行 `http(s)`。SEND 的 filter 绝不能带 scheme。
 - 目录：`app/src/main/java/moe/hellorename/`（业务代码）、`app/src/debug/`（仅测试用 provider）、`tools/`（体检脚本）、`.github/workflows/`（QA / 模拟器 / 发布）。
+
+### 1.1 beta 分支（长期存在）
+
+- 用途：在真机上做 manifest / 入口类对照实验（2.4.0-beta 系列就是把 VIEW 改成 SaveCopy 形状），实验结论只影响 beta，不动正式版。
+- 包名：`appVersionName` 旁的 `appIdSuffix` 默认值就是 `.beta`，release / debug / instrumentation 全是 `moe.hellorename.beta`；`emulator_ui_check.sh` 的 `APP_ID` 同步为 `.beta`。不要再给 QA 传 `-PapplicationIdSuffix=.debug`。
+- 签名：`build.yml` 用同一套 Secrets，证书 SHA-256 与正式版一致（`3682cce6…cb6ccaca`）。
+- 版本：`versionName` 形如 `2.4.0-beta.1`，tag 形如 `v2.4.0-beta.1`；`build.yml` 对带 `-` 的 tag 自动加 `--prerelease`。
+- 门禁：`tools/qa_check.py --view-shape savecopy` 断言 VIEW 只有 SaveCopy 那条 filter（7 类 MIME + `content` scheme，无 `*/*`、无 null type 兜底）；正式版继续用默认 `wildcard`。
+- 合并方向：`main` → `beta` 可以；`beta` 的包名 / 实验 manifest / `qa_check` profile 不要带回 `main`。合入 `main` 新功能时保留 beta 的 `appIdSuffix`、`viewIntentFilter_resolvesContentUris_andIgnoresWebLinks` 断言和 workflow 里的 `--view-shape savecopy`。
 
 ## 2. 硬约束（违反就不要提交）
 
@@ -69,7 +78,7 @@ HOME=$PWD/.android-user android docs fetch \
 
 ## 5. 构建、测试与门禁
 
-- push 到 `main` 或开 PR → `QA`：`gradle test` → `lintRelease`（`tools/lint_summary.py` 门禁）→ `assembleRelease`（`.debug` 包名）→ `tools/qa_check.py`；并行跑 `emulator-ui.yml`。
+- push 到 `main` / `beta` 或开 PR → `QA`：`gradle test` → `lintRelease`（`tools/lint_summary.py` 门禁）→ `assembleRelease`（包名随分支：`main` 是 `.debug`，`beta` 自带 `.beta`）→ `tools/qa_check.py`；并行跑 `emulator-ui.yml`。
 - push `v*` tag → `Release APK`：先 `needs: emulator-verify`（API 36 模拟器跑 `connectedDebugAndroidTest` + 浅/深色截图），再校验签名 Secrets、构建、体检、发布。
 - 本地不产包，验证靠 CI：
 
@@ -81,7 +90,7 @@ HOME=$PWD/.android-user android docs fetch \
 
 - 测试计数：JVM **88** 条、API 36 instrumentation **20** 条。增删测试后同步 README 与 CHANGELOG 里的数字。
 - **同 UID 陷阱**：`app/src/debug` 的 `TestFolderProvider` 和被测 App 同 UID，`ContentProvider.enforceReadPermissionInner()` 对同 UID 直接放行。所以 instrumentation 绿**不代表**跨应用 URI 授权在真机成立（文件夹分享就是这样：跨应用只给单 URI 授权时必然失败）。涉及跨应用授权的行为，必须真机取证后再下结论。
-- `qa_check.py` 的期望值：包名、versionName、`minSdk 24`、`targetSdk 36`、`MainActivity` exported + 四个 action（`SEND` / `SEND_MULTIPLE` / `VIEW` / `MAIN`）、`FileProvider` 配置、v2/v3 签名、证书 SHA-256、无残留密钥文件。
+- `qa_check.py` 的期望值：包名、versionName、`minSdk 24`、`targetSdk 36`、`MainActivity` exported + 四个 action（`SEND` / `SEND_MULTIPLE` / `VIEW` / `MAIN`）、`FileProvider` 配置、v2/v3 签名、证书 SHA-256、无残留密钥文件。beta 分支另传 `--expect-package moe.hellorename.beta --view-shape savecopy`。
 
 ## 6. 发布流程
 
@@ -161,7 +170,7 @@ $HOME/Android/Sdk/build-tools/36.0.0/aapt2 dump badging .verify/v2.0.0/*.apk | h
 - MediaStore 的 `text/plain` 只映射到 `txt`：保存时必须显式给 MIME，否则 `.ini` → `.ini.txt`。
 - 文件夹分享没有平台契约：`ACTION_SEND` 默认只授予**那一个 URI**；没有 `FLAG_GRANT_PREFIX_URI_PERMISSION` 就列不出子项（`SecurityException`）。所以 2.1.0 起不再展开文件夹，统一按纯文本处理；同 UID 的 instrumentation 测不出跨应用授权差异。
 - instrumentation 跑完会卸载被测 App：`emulator_ui_check.sh` 里先重装 debug APK 再截图。
-- QA 构建的包名是 `moe.hellorename.debug`，`qa_check.py` 必须带 `--expect-package`，否则误报。
+- QA 构建的包名随分支：`main` 是 `moe.hellorename.debug`，`beta` 是 `moe.hellorename.beta`；`qa_check.py` 必须带 `--expect-package`，否则误报。
 - 文本模式不要把正文和链接拼在一起，也不要把 CRLF 改成 LF（用户会拿它做逐字节对比）。
-- `ACTION_VIEW` 的 `*/*` filter 匹配不上 MIME 为 null 的 Intent（`IntentFilter.findMimeType(null)` 直接 false），要单独一条只声明 `content` scheme 的 filter 兜底；同一个 `<intent-filter>` 里多个 `<data>` 是“与”关系，不能合并成一条。
+- 正式版：`ACTION_VIEW` 的 `*/*` filter 匹配不上 MIME 为 null 的 Intent（`IntentFilter.findMimeType(null)` 直接 false），要单独一条只声明 `content` scheme 的 filter 兜底；同一个 `<intent-filter>` 里多个 `<data>` 是“与”关系，不能合并成一条。beta 分支故意没有这条兜底（SaveCopy 形状），instrumentation 断言的是“无 MIME 不解析”——要改回去先确认不是在跑对照实验。
 - 只声明 MIME 的 filter 只会匹配 `content:` / `file:`（框架的 Data test 规则 4），`http(s)` 不会被接管；`file://` 能进来但零权限读不了，按“源文件不可用”报错即可。
