@@ -20,24 +20,32 @@
             android:launchMode="singleTop"
             android:windowSoftInputMode="adjustResize">
 
-            <!-- 从启动器打开（可以选择文件） -->
+            <!--
+                从启动器打开（手动选择文件）。SaveCopy 没有这条入口，
+                但 beta 要能手动打开做对照，所以保留；它不参与“打开/分享”的候选匹配。
+            -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- 作为分享接收方：单个文件 -->
+            <!--
+                SEND / SEND_MULTIPLE：beta.2 起与 SaveCopy 完全一致——
+                两个 action 装在同一个 filter 里，只声明 7 类 MIME，而且不带 scheme。
+                正式版那两条 */* filter 已删除（*/* 比这 7 类宽，但不排除 OEM 解析器
+                用自己的一套规则做候选过滤）；分享请求通常没有 data URI，带 scheme 会直接不匹配。
+            -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="*/*" />
-            </intent-filter>
-
-            <!-- 作为分享接收方：多个文件 -->
-            <intent-filter>
                 <action android:name="android.intent.action.SEND_MULTIPLE" />
                 <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="*/*" />
+                <data android:mimeType="application/*" />
+                <data android:mimeType="audio/*" />
+                <data android:mimeType="font/*" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="model/*" />
+                <data android:mimeType="text/*" />
+                <data android:mimeType="video/*" />
             </intent-filter>
 
             <!--

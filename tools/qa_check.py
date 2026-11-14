@@ -236,6 +236,44 @@ def view_shape_checks(view_filters: list[dict], shape: str) -> None:
     )
 
 
+def share_shape_checks(activity: dict) -> None:
+    """SaveCopy 的 SEND / SEND_MULTIPLE 也是 7 类 MIME、不带 scheme，并且两个 action 合并成一条 filter。"""
+    expected = {f"{family}/*" for family in SAVECOPY_MIME_FAMILIES}
+    filters = 0
+    types: set[str] = set()
+    schemes: set[str] = set()
+    for intent_filter in find_children(activity, "intent-filter"):
+        names = {
+            attr_str(a["attrs"].get("name"))
+            for a in find_children(intent_filter, "action")
+        }
+        if not names & {"android.intent.action.SEND", "android.intent.action.SEND_MULTIPLE"}:
+            continue
+        filters += 1
+        for data in find_children(intent_filter, "data"):
+            mime = attr_str(data["attrs"].get("mimeType"))
+            scheme = attr_str(data["attrs"].get("scheme"))
+            if mime:
+                types.add(mime)
+            if scheme:
+                schemes.add(scheme)
+    check(
+        filters == 1,
+        "SEND/SEND_MULTIPLE 合并成一条 intent-filter（SaveCopy 形状）",
+        f"实际 {filters} 条",
+    )
+    check(
+        types == expected,
+        "SEND/SEND_MULTIPLE 的 <data> 恰好是 SaveCopy 的 7 类 MIME（无 */*）",
+        f"实际 {sorted(types)}",
+    )
+    check(
+        not schemes,
+        "SEND/SEND_MULTIPLE 不带 scheme（分享请求通常没有 data URI）",
+        ", ".join(sorted(schemes)) or "无",
+    )
+
+
 def manifest_checks(aapt2: str, apk: str, expected_authority: str, view_shape: str) -> None:
     tree = manifest_tree(aapt2, apk)
     if tree is None:
@@ -305,6 +343,8 @@ def manifest_checks(aapt2: str, apk: str, expected_authority: str, view_shape: s
             )
         ]
         view_shape_checks(view_filters, view_shape)
+        if view_shape == VIEW_SHAPE_SAVECOPY:
+            share_shape_checks(activity)
         check("android.intent.action.MAIN" in actions, "注册了 MAIN（可从启动器打开）")
         check("android.intent.category.LAUNCHER" in categories, "注册了 LAUNCHER")
 
@@ -499,7 +539,10 @@ def main() -> int:
         "--view-shape",
         choices=(VIEW_SHAPE_WILDCARD, VIEW_SHAPE_SAVECOPY),
         default=VIEW_SHAPE_WILDCARD,
-        help="VIEW 入口的预期形状：wildcard = 正式版三条 filter；savecopy = beta 分支的单条 7 类 MIME",
+        help=(
+            "入口的预期形状：wildcard = 正式版（VIEW 三条 filter、SEND 带 */*）；"
+            "savecopy = beta 分支（VIEW 与 SEND 都只有 7 类 MIME）"
+        ),
     )
     parser.add_argument("--allow-debug-cert", action="store_true")
     parser.add_argument("--summary-file", default=None)

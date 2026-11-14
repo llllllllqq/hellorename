@@ -9,7 +9,7 @@
 - 包名 `moe.hellorename`（`main` 正式版；QA 构建会加 `.debug` 后缀，避免和正式包冲突）；应用名 `HelloRename`，中文 `改名助手`。另有长期存在的 `beta` 分支，包名统一带 `.beta` 后缀，见 §1.1。
 - 平台：`minSdk 24`、`compileSdk 36`、`targetSdk 36`；AGP **9.4.1**、Gradle **9.6.0**、Kotlin **2.4.21**、JDK **17**。
 - 单 Activity（`MainActivity`，`launchMode=singleTop`），没有自定义 View、没有 Compose。
-- 入口有四类：`MAIN/LAUNCHER`、`SEND`、`SEND_MULTIPLE`、`VIEW`（“打开方式”，与单文件分享共用 `loadSource`）；模式状态机是 `ShareMode.FILE / MULTI / TEXT / NONE`。VIEW 的形状随分支：`main` 三条 filter（显式 `content` scheme + `*/*`、只写 `*/*`、只写 `content` 兜底 null type），`beta` 只有一条 SaveCopy 形状（7 类 MIME + `content` scheme，无 `*/*`、无 null type 兜底）；都不能放行 `http(s)`。SEND 的 filter 绝不能带 scheme。
+- 入口有四类：`MAIN/LAUNCHER`、`SEND`、`SEND_MULTIPLE`、`VIEW`（“打开方式”，与单文件分享共用 `loadSource`）；模式状态机是 `ShareMode.FILE / MULTI / TEXT / NONE`。形状随分支：`main` 的 VIEW 是三条 filter（显式 `content` scheme + `*/*`、只写 `*/*`、只写 `content` 兜底 null type）、SEND/SEND_MULTIPLE 是两条 `*/*`；`beta` 从 2.4.0-beta.2 起整个入口面照搬 SaveCopy（VIEW 一条 7 类 MIME + `content` scheme；SEND/SEND_MULTIPLE 合并一条 7 类 MIME、不带 scheme），没有 `*/*`、没有 null type 兜底。都不能放行 `http(s)`。SEND 的 filter 绝不能带 scheme。
 - 目录：`app/src/main/java/moe/hellorename/`（业务代码）、`app/src/debug/`（仅测试用 provider）、`tools/`（体检脚本）、`.github/workflows/`（QA / 模拟器 / 发布）。
 
 ### 1.1 beta 分支（长期存在）
@@ -17,8 +17,8 @@
 - 用途：在真机上做 manifest / 入口类对照实验（2.4.0-beta 系列就是把 VIEW 改成 SaveCopy 形状），实验结论只影响 beta，不动正式版。
 - 包名：`appVersionName` 旁的 `appIdSuffix` 默认值就是 `.beta`，release / debug / instrumentation 全是 `moe.hellorename.beta`；`emulator_ui_check.sh` 的 `APP_ID` 同步为 `.beta`。不要再给 QA 传 `-PapplicationIdSuffix=.debug`。
 - 签名：`build.yml` 用同一套 Secrets，证书 SHA-256 与正式版一致（`3682cce6…cb6ccaca`）。
-- 版本：`versionName` 形如 `2.4.0-beta.1`，tag 形如 `v2.4.0-beta.1`；`build.yml` 对带 `-` 的 tag 自动加 `--prerelease`。
-- 门禁：`tools/qa_check.py --view-shape savecopy` 断言 VIEW 只有 SaveCopy 那条 filter（7 类 MIME + `content` scheme，无 `*/*`、无 null type 兜底）；正式版继续用默认 `wildcard`。
+- 版本：`versionName` 形如 `2.4.0-beta.2`，tag 形如 `v2.4.0-beta.2`；`build.yml` 对带 `-` 的 tag 自动加 `--prerelease`。
+- 门禁：`tools/qa_check.py --view-shape savecopy` 断言 VIEW 与 SEND/SEND_MULTIPLE 都只有 SaveCopy 那条 filter（7 类 MIME；VIEW 带 `content` scheme，SEND 不带 scheme；无 `*/*`、无 null type 兜底）；正式版继续用默认 `wildcard`。
 - 合并方向：`main` → `beta` 可以；`beta` 的包名 / 实验 manifest / `qa_check` profile 不要带回 `main`。合入 `main` 新功能时保留 beta 的 `appIdSuffix`、`viewIntentFilter_resolvesContentUris_andIgnoresWebLinks` 断言和 workflow 里的 `--view-shape savecopy`。
 
 ## 2. 硬约束（违反就不要提交）

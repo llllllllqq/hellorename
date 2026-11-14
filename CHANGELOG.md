@@ -2,6 +2,24 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)；每个 `v*` tag 会由 GitHub Actions 自动构建并发布 APK。
 
+## [2.4.0-beta.2] - 2026-11-14
+
+beta.1 在目标应用里仍然不出现在候选列表，这一版把整个 manifest 入口面完全对齐 SaveCopy：不只 VIEW，SEND / SEND_MULTIPLE 也照搬。
+
+### Changed
+- **SEND / SEND_MULTIPLE 照搬 SaveCopy**：删掉原来两条各自带 `*/*` 的 filter，换成 SaveCopy 同款的一条 filter——`SEND` 和 `SEND_MULTIPLE` 两个 action 合并、7 类 MIME（`application/*`、`audio/*`、`font/*`、`image/*`、`model/*`、`text/*`、`video/*`）、不带 scheme。
+- **VIEW 保持不变**：仍是 beta.1 的 SaveCopy 形状（7 类 MIME + 显式 `content` scheme）。
+- **启动器入口保留**：SaveCopy 没有 `MAIN/LAUNCHER`，但 beta 需要手动打开做对照；它不参与打开/分享的候选匹配。
+- **版本号**：`versionName` 2.4.0-beta.2，`versionCode` 从 24 起（beta.1 实际是 23，保证能覆盖安装）。
+- **QA 门禁**：`--view-shape savecopy` 现在同时断言 SEND/SEND_MULTIPLE——只有一条 filter、恰好 7 类 MIME、不带 scheme。
+
+### Testing
+- instrumentation 仍 20 条：`*/*` 的 SEND 请求仍能命中 7 类 MIME 的 filter（`findMimeType("*/*")` 对非空类型集合返回 true），无 data URI 也照旧解析。
+- JVM 88 条不变。
+
+### Known
+- 纯取证版本：`message/*`、`multipart/*` 等 7 类之外的分享/打开请求都不会再出现本应用；正式版不受影响。
+
 ## [2.4.0-beta.1] - 2026-11-14
 
 长期 `beta` 分支的第一版，只做对照实验：包名加 `.beta` 后缀与正式版并存，签名仍是发布密钥；“打开方式”入口改成 SaveCopy 的形状，用来验证 HyperOS 的候选列表到底看什么。

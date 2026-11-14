@@ -167,7 +167,7 @@ gradle connectedDebugAndroidTest   # 需要模拟器或真机；API 36 门禁，
 - **包名**：本分支所有变体（含 debug）都带 `.beta` 后缀（`app/build.gradle.kts` 里 `appIdSuffix` 的默认值），可以和正式版 `moe.hellorename` 同时安装。
 - **签名**：仍是发布密钥（同一套 Secrets），`.beta` 包与正式包的证书 SHA-256 一致，便于对比安装与取证。
 - **版本**：`versionName` 形如 `2.4.0-beta.1`，tag 形如 `v2.4.0-beta.1`；Release 页标成 prerelease，不会抢 Latest。
-- **本轮实验（2.4.0-beta.1）**：“打开方式”入口完全照搬 [SaveCopy](https://github.com/RikkaApps/SaveCopy)——删掉正式版的三条 VIEW filter（`content` + `*/*`、只写 `*/*`、只写 `content` 兜底 null type），只留一条 7 类 MIME（`application/*`、`audio/*`、`font/*`、`image/*`、`model/*`、`text/*`、`video/*`）且每条都显式带 `android:scheme="content"` 的 filter。
+- **当前实验（2.4.0-beta.2）**：整个入口面照搬 [SaveCopy](https://github.com/RikkaApps/SaveCopy)。VIEW 只留一条：7 类 MIME（`application/*`、`audio/*`、`font/*`、`image/*`、`model/*`、`text/*`、`video/*`）且每条都显式带 `android:scheme="content"`；SEND / SEND_MULTIPLE 合并成一条：同样的 7 类 MIME、不带 scheme。正式版的 `*/*` VIEW/SEND filter 和 null type 兜底在这条分支上都不存在。`MAIN/LAUNCHER` 保留，只为手动打开做对照。
 - **门禁**：本分支的 QA / Release 用 `--view-shape savecopy` 断言 VIEW 只有这一条 filter；正式版继续用默认的 `wildcard`。
 
 ## 隐私
@@ -180,7 +180,7 @@ gradle connectedDebugAndroidTest   # 需要模拟器或真机；API 36 门禁，
 - 改扩展名会同时改变对外声明的 MIME type，部分 App 会因此拒收（界面有提示）。
 - 多文件只允许保存，不能改名或发送；文件名保持原样（仅做非法字符/长度清洗）。
 - 文件夹分享不读取内容：`ACTION_SEND` 默认只授予那一个 URI，子项是另外的 URI，跨应用拿不到（需要 `FLAG_GRANT_PREFIX_URI_PERMISSION` 或 SAF 树授权）。应用不申请存储权限、也不绕过 Provider，所以统一把文件夹的 URI/路径当纯文本保存/转发；要传内容请多选文件或先打包。
-- 本 beta 分支的 `ACTION_VIEW` 显式声明了 `content` scheme，只覆盖 7 类 MIME 的 `content:` 请求：没有 MIME 的打开请求、`file://` 路径和 `http(s)` 链接都不会出现本应用（正式版另有 `*/*` 与 null type 兜底）。这是 2.4.0-beta 系列的对照实验，不是回归。
+- 本 beta 分支的入口完全对齐 SaveCopy：`ACTION_VIEW` 只覆盖 7 类 MIME 的 `content:` 请求，`ACTION_SEND` / `SEND_MULTIPLE` 也只认这 7 类、不带 scheme。没有 MIME 的打开请求、`file://` 路径、`http(s)` 链接，以及 `message/*`、`multipart/*` 等 7 类之外的分享都不会出现本应用（正式版另有 `*/*` 与 null type 兜底）。这是 2.4.0-beta 系列的对照实验，不是回归。
 - `file://` 裸路径即使能进来也读不了：本应用没有存储权限，`/sdcard` 下的路径会被系统拒绝，界面会报“源文件不可用”。这类来源请改用文件管理器里的分享（`content://`）。
 - HyperOS / MIUI 的“打开方式”是小米自己实现的（`com.android.internal.app.MiuiResolverActivity`），会把候选分成“推荐选项 / 其他选项”并按使用频率排序；在那里看不到本应用时，往下翻到“其他选项”，或者把本应用设为默认打开方式。这是 OEM 的 UI 行为，不是 manifest 少声明了什么——可以用 `adb shell pm query-activities ...` 确认本应用确实在系统候选里。
 - 多文件保存到 `Download/` 根；不再保留来源的目录层级（文件夹本身已经不展开）。

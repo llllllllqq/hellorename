@@ -34,8 +34,8 @@ val hasReleaseSigning = sigStoreFile != null && sigStorePassword != null &&
 //   -PversionName=1.2.3 -PversionCode=42 [-PapplicationIdSuffix=…]
 // beta 分支（长期存在）：默认包名就带 .beta 后缀（release / debug 一致），与正式版并存；
 // 这里的默认值只是给本地 `gradle assembleRelease` 兜底，CI 会用 -PversionName/-PversionCode 覆盖。
-val appVersionName = (project.findProperty("versionName") as String?)?.takeIf { it.isNotBlank() } ?: "2.4.0-beta.1"
-val appVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 20
+val appVersionName = (project.findProperty("versionName") as String?)?.takeIf { it.isNotBlank() } ?: "2.4.0-beta.2"
+val appVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 24
 // beta 分支：整条分支的包名都带 .beta（debug 一并带上，避免误装成正式包）。
 val appIdSuffix = (project.findProperty("applicationIdSuffix") as String?)?.takeIf { it.isNotBlank() } ?: ".beta"
 
