@@ -15,7 +15,9 @@ ROOT="${GITHUB_WORKSPACE:-$(pwd)}"
 OUT="$ROOT/app/build/reports/ui"
 # beta 分支的 debug 变体也带 .beta 后缀（app/build.gradle.kts 的默认 appIdSuffix）
 APP_ID="moe.hellorename.beta"
-ACTIVITY="$APP_ID/.MainActivity"
+# applicationIdSuffix 只改包名，不改 namespace：Activity 全名仍是 moe.hellorename.MainActivity。
+# 不能写 "$APP_ID/.MainActivity"——am 会把 .MainActivity 展开成 <applicationId>.MainActivity。
+ACTIVITY="$APP_ID/moe.hellorename.MainActivity"
 DEBUG_APK="$ROOT/app/build/outputs/apk/debug/app-debug.apk"
 
 mkdir -p "$OUT"
