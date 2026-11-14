@@ -27,6 +27,7 @@ EXPECTED_PACKAGE = "moe.hellorename"
 EXPECTED_MIN_SDK = 24
 EXPECTED_TARGET_SDK = 36
 EXPECTED_ACTIVITY = "moe.hellorename.MainActivity"   # namespace 决定，不随 applicationIdSuffix 变
+EXPECTED_ENTRY_ACTIVITY = "moe.hellorename.ShareActivity"   # beta 分支：文件入口的转接组件
 EXPECTED_PROVIDER = "androidx.core.content.FileProvider"
 # androidx.core 会用 App 自己的 applicationId 声明一个 signature 级权限用于
 # ContextCompat.registerReceiver(RECEIVER_NOT_EXPORTED)；它不向任何外部应用授权，
@@ -197,6 +198,17 @@ def find_children(node: dict, tag: str) -> list[dict]:
     return [c for c in node.get("children", []) if c["tag"] == tag]
 
 
+def filter_actions(activity: dict) -> tuple[set[str], set[str]]:
+    actions: set[str] = set()
+    categories: set[str] = set()
+    for intent_filter in find_children(activity, "intent-filter"):
+        for action in find_children(intent_filter, "action"):
+            actions.add(attr_str(action["attrs"].get("name")))
+        for category in find_children(intent_filter, "category"):
+            categories.add(attr_str(category["attrs"].get("name")))
+    return actions, categories
+
+
 def view_shape_checks(view_filters: list[dict], shape: str) -> None:
     """VIEW 入口的两种形状：正式版用 wildcard（三条 filter，含 */* 和 null type 兜底），
     beta 分支用 savecopy（一条 filter，7 类 MIME + 显式 content scheme）。"""
@@ -308,11 +320,10 @@ def manifest_checks(aapt2: str, apk: str, expected_authority: str, view_shape: s
             )
 
     # ---- activity ----
-    activity = None
-    for node in find_children(app, "activity"):
-        if attr_str(node["attrs"].get("name")) == EXPECTED_ACTIVITY:
-            activity = node
-            break
+    activities = {
+        attr_str(n["attrs"].get("name")): n for n in find_children(app, "activity")
+    }
+    activity = activities.get(EXPECTED_ACTIVITY)
     if check(activity is not None, f"存在 activity {EXPECTED_ACTIVITY}"):
         assert activity is not None
         check(
@@ -325,26 +336,70 @@ def manifest_checks(aapt2: str, apk: str, expected_authority: str, view_shape: s
             "MainActivity launchMode=singleTop",
             str(launch_mode),
         )
-        actions = set()
-        categories = set()
-        for intent_filter in find_children(activity, "intent-filter"):
-            for action in find_children(intent_filter, "action"):
-                actions.add(attr_str(action["attrs"].get("name")))
-            for category in find_children(intent_filter, "category"):
-                categories.add(attr_str(category["attrs"].get("name")))
-        for action in ("android.intent.action.SEND", "android.intent.action.SEND_MULTIPLE"):
-            check(action in actions, f"注册了 {action.split('.')[-1]} 分享接收")
-        check("android.intent.action.VIEW" in actions, "注册了 VIEW（可作为“打开方式”接收）")
-        view_filters = [
-            f for f in find_children(activity, "intent-filter")
-            if any(
-                attr_str(a["attrs"].get("name")) == "android.intent.action.VIEW"
-                for a in find_children(f, "action")
-            )
-        ]
-        view_shape_checks(view_filters, view_shape)
+        actions, categories = filter_actions(activity)
+
         if view_shape == VIEW_SHAPE_SAVECOPY:
-            share_shape_checks(activity)
+            # beta 分支：文件入口（VIEW / SEND / SEND_MULTIPLE）挂在独立的 ShareActivity 上，
+            # 形态与 SaveCopy 的 SaveActivity 一致；MainActivity 只留桌面入口。
+            check(
+                not (
+                    actions
+                    & {
+                        "android.intent.action.VIEW",
+                        "android.intent.action.SEND",
+                        "android.intent.action.SEND_MULTIPLE",
+                    }
+                ),
+                "文件入口不在 MainActivity 上（桌面入口与文件入口分离）",
+                ", ".join(sorted(actions)) or "无",
+            )
+            entry = activities.get(EXPECTED_ENTRY_ACTIVITY)
+            if check(entry is not None, f"存在入口 activity {EXPECTED_ENTRY_ACTIVITY}"):
+                assert entry is not None
+                entry_actions, _ = filter_actions(entry)
+                check(
+                    attr_bool(entry["attrs"].get("exported")) is True,
+                    "ShareActivity exported=true",
+                )
+                check(
+                    attr_bool(entry["attrs"].get("noHistory")) is True,
+                    "ShareActivity noHistory=true（转发后不留在返回栈）",
+                )
+                check(
+                    attr_bool(entry["attrs"].get("excludeFromRecents")) is True,
+                    "ShareActivity excludeFromRecents=true",
+                )
+                for action in (
+                    "android.intent.action.SEND",
+                    "android.intent.action.SEND_MULTIPLE",
+                ):
+                    check(action in entry_actions, f"ShareActivity 注册了 {action.split('.')[-1]}")
+                check(
+                    "android.intent.action.VIEW" in entry_actions,
+                    "ShareActivity 注册了 VIEW（可作为“打开方式”接收）",
+                )
+                view_filters = [
+                    f for f in find_children(entry, "intent-filter")
+                    if any(
+                        attr_str(a["attrs"].get("name")) == "android.intent.action.VIEW"
+                        for a in find_children(f, "action")
+                    )
+                ]
+                view_shape_checks(view_filters, view_shape)
+                share_shape_checks(entry)
+        else:
+            for action in ("android.intent.action.SEND", "android.intent.action.SEND_MULTIPLE"):
+                check(action in actions, f"注册了 {action.split('.')[-1]} 分享接收")
+            check("android.intent.action.VIEW" in actions, "注册了 VIEW（可作为“打开方式”接收）")
+            view_filters = [
+                f for f in find_children(activity, "intent-filter")
+                if any(
+                    attr_str(a["attrs"].get("name")) == "android.intent.action.VIEW"
+                    for a in find_children(f, "action")
+                )
+            ]
+            view_shape_checks(view_filters, view_shape)
+
         check("android.intent.action.MAIN" in actions, "注册了 MAIN（可从启动器打开）")
         check("android.intent.category.LAUNCHER" in categories, "注册了 LAUNCHER")
 

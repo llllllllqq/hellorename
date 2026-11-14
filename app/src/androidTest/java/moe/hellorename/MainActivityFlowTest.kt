@@ -13,6 +13,7 @@ import android.widget.EditText
 import android.widget.TextView
 import androidx.annotation.RequiresApi
 import androidx.core.content.FileProvider
+import androidx.test.core.app.ActivityLifecycleMonitorRegistry
 import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso.onView
 import androidx.test.espresso.action.ViewActions.click
@@ -26,6 +27,7 @@ import androidx.test.espresso.matcher.ViewMatchers.withId
 import androidx.test.espresso.matcher.ViewMatchers.withText
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.runner.lifecycle.Stage
 import org.hamcrest.CoreMatchers.not
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -288,6 +290,68 @@ class MainActivityFlowTest {
             "http(s) 链接不应解析到本应用（VIEW 只声明 content scheme），实际: $webResolved",
             webResolved.any { it.activityInfo.packageName == context.packageName },
         )
+    }
+
+    /**
+     * 文件入口必须挂在 ShareActivity（无界面转接组件）上，MainActivity 只保留桌面入口。
+     * HyperOS 的分享面板只展示“专用文件处理组件”，入口挂在桌面 Activity 上会被过滤掉。
+     */
+    @Test
+    fun fileEntries_resolveToShareActivity() {
+        val pm = context.packageManager
+        val entries = listOf(
+            Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(Uri.parse("content://moe.hellorename.probe/file.zip"), "application/zip")
+            },
+            Intent(Intent.ACTION_SEND).apply { type = "application/zip" },
+            Intent(Intent.ACTION_SEND_MULTIPLE).apply { type = "image/png" },
+        )
+        for (intent in entries) {
+            val names = pm.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
+                .map { it.activityInfo.name }
+            assertTrue(
+                "$intent 应解析到 ShareActivity，实际: $names",
+                "moe.hellorename.ShareActivity" in names,
+            )
+            assertFalse(
+                "$intent 不应再解析到 MainActivity，实际: $names",
+                "moe.hellorename.MainActivity" in names,
+            )
+        }
+    }
+
+    /** ShareActivity 只做转接：收到的 VIEW 请求必须原样到达 MainActivity 并完成复制。 */
+    @Test
+    fun shareActivity_forwardsToMainActivity() {
+        val source = newSource("forwarded-${System.nanoTime()}.txt", "forwarded payload")
+        val intent = Intent(context, ShareActivity::class.java).apply {
+            action = Intent.ACTION_VIEW
+            setDataAndType(uriFor(source), "text/plain")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        instrumentation.startActivitySync(intent)
+
+        val deadline = System.currentTimeMillis() + 20_000L
+        while (System.currentTimeMillis() < deadline) {
+            val resumed = resumedMainActivity()
+            var ready = false
+            if (resumed != null) {
+                instrumentation.runOnMainSync {
+                    ready = resumed.findViewById<Button>(R.id.sendButton).isEnabled
+                }
+            }
+            if (resumed != null && ready) {
+                onView(withId(R.id.oldNameText)).check(matches(withText(source.name)))
+                instrumentation.runOnMainSync { resumed.finish() }
+                val goneDeadline = System.currentTimeMillis() + 5_000L
+                while (System.currentTimeMillis() < goneDeadline && resumedMainActivity() != null) {
+                    Thread.sleep(50L)
+                }
+                return
+            }
+            Thread.sleep(100L)
+        }
+        throw AssertionError("ShareActivity 没有在 20s 内把请求转交给 MainActivity")
     }
 
     /**
@@ -566,6 +630,18 @@ class MainActivityFlowTest {
             assertChecksums(scenario)
             onView(withId(R.id.sendButton)).check(matches(isEnabled()))
         }
+    }
+
+    /** 轮询当前 RESUMED 的 MainActivity（ShareActivity 转交后界面由它承担）。 */
+    private fun resumedMainActivity(): MainActivity? {
+        var found: MainActivity? = null
+        instrumentation.runOnMainSync {
+            found = ActivityLifecycleMonitorRegistry.getInstance()
+                .getActivitiesInStage(Stage.RESUMED)
+                .filterIsInstance<MainActivity>()
+                .firstOrNull()
+        }
+        return found
     }
 
     private fun assertChecksums(scenario: ActivityScenario<MainActivity>) {

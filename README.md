@@ -157,7 +157,7 @@ gradle assembleRelease                               # 或 ./gradlew assembleRel
 
 ```bash
 gradle test                    # 88 条 JVM 单测（文件名/缓存/流复制/操作代际/校验值/时间戳）
-gradle connectedDebugAndroidTest   # 需要模拟器或真机；API 36 门禁，20 条 instrumentation
+gradle connectedDebugAndroidTest   # 需要模拟器或真机；API 36 门禁，22 条 instrumentation
 ```
 
 ## Beta 分支
@@ -167,7 +167,7 @@ gradle connectedDebugAndroidTest   # 需要模拟器或真机；API 36 门禁，
 - **包名**：本分支所有变体（含 debug）都带 `.beta` 后缀（`app/build.gradle.kts` 里 `appIdSuffix` 的默认值），可以和正式版 `moe.hellorename` 同时安装。
 - **签名**：仍是发布密钥（同一套 Secrets），`.beta` 包与正式包的证书 SHA-256 一致，便于对比安装与取证。
 - **版本**：`versionName` 形如 `2.4.0-beta.1`，tag 形如 `v2.4.0-beta.1`；Release 页标成 prerelease，不会抢 Latest。
-- **当前实验（2.4.0-beta.2）**：整个入口面照搬 [SaveCopy](https://github.com/RikkaApps/SaveCopy)。VIEW 只留一条：7 类 MIME（`application/*`、`audio/*`、`font/*`、`image/*`、`model/*`、`text/*`、`video/*`）且每条都显式带 `android:scheme="content"`；SEND / SEND_MULTIPLE 合并成一条：同样的 7 类 MIME、不带 scheme。正式版的 `*/*` VIEW/SEND filter 和 null type 兜底在这条分支上都不存在。`MAIN/LAUNCHER` 保留，只为手动打开做对照。
+- **当前实验（2.4.0-beta.3）**：入口面照搬 [SaveCopy](https://github.com/RikkaApps/SaveCopy)，并且从 2.4.0-beta.3 起**把入口组件也拆成独立 Activity**。VIEW 只留一条：7 类 MIME（`application/*`、`audio/*`、`font/*`、`image/*`、`model/*`、`text/*`、`video/*`）且每条都显式带 `android:scheme="content"`；SEND / SEND_MULTIPLE 合并成一条：同样的 7 类 MIME、不带 scheme。三条 filter 都挂在 `ShareActivity` 上——`exported` + `noHistory` + `excludeFromRecents` + 透明主题，收到 Intent 原样转给 `MainActivity` 后立刻 `finish()`，组件形态与 `SaveActivity` 一致。`MainActivity` 只保留 `MAIN/LAUNCHER`，只为手动打开做对照。
 - **门禁**：本分支的 QA / Release 用 `--view-shape savecopy` 断言 VIEW 只有这一条 filter；正式版继续用默认的 `wildcard`。
 
 ## 隐私

@@ -21,13 +21,28 @@
             android:windowSoftInputMode="adjustResize">
 
             <!--
-                从启动器打开（手动选择文件）。SaveCopy 没有这条入口，
-                但 beta 要能手动打开做对照，所以保留；它不参与“打开/分享”的候选匹配。
+                从启动器打开（手动选择文件）。SaveCopy 没有桌面入口，但 beta 要能手动打开做对照；
+                它不参与“打开/分享”的候选匹配。
             -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+        </activity>
+
+        <!--
+            文件入口的转接组件：形态照抄 SaveCopy 的 SaveActivity——
+            exported、noHistory、excludeFromRecents、透明主题，且不是桌面入口。
+            HyperOS / MIUI 的分享面板只展示这种“专用文件处理组件”；入口挂在 MainActivity 上时
+            系统能解析到但面板里不列出（beta.2 的实测结论）。
+            它只做转发，收到 Intent 后立刻把原 Intent 交给 MainActivity 并 finish。
+        -->
+        <activity
+            android:name=".ShareActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:noHistory="true"
+            android:theme="@style/Theme.Hellorename.Shim">
 
             <!--
                 SEND / SEND_MULTIPLE：beta.2 起与 SaveCopy 完全一致——

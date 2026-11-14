@@ -31,4 +31,15 @@
         <item name="android:statusBarColor">@color/app_background</item>
         <item name="android:windowLightStatusBar">@bool/is_light_theme</item>
     </style>
+
+    <!--
+        文件入口转接 Activity（ShareActivity）用的透明主题：它只负责把 Intent 交给 MainActivity
+        后立刻 finish，不应该留下任何可见界面。没用 @android:style/Theme.NoDisplay 是因为那个
+        主题要求 onResume 前必须 finish，稍有不慎就抛 "did not call finish()" 崩溃。
+    -->
+    <style name="Theme.Hellorename.Shim" parent="@android:style/Theme.Translucent.NoTitleBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowDisablePreview">true</item>
+    </style>
 </resources>

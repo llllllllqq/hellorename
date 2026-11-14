@@ -2,6 +2,24 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)；每个 `v*` tag 会由 GitHub Actions 自动构建并发布 APK。
 
+## [2.4.0-beta.3] - 2026-11-14
+
+beta.2 的入口声明已经和 SaveCopy 一致，但 WorkBuddy 的分享面板里仍然只有「文件管理 / 浏览器 / 保存副本」三项，没有改名助手。查到的关键差异不在 filter，而在**入口挂在哪个组件上**：那三项都是专用文件处理组件，SaveCopy 的是 `SaveActivity`（`exported` + `noHistory` + `excludeFromRecents` + 无界面主题），而我们的入口挂在带桌面入口、有完整界面的 `MainActivity` 上。这一版把入口拆出去，组件形态与 `SaveActivity` 一致。
+
+### Changed
+- **新增 `ShareActivity`**：`exported=true`、`noHistory=true`、`excludeFromRecents=true`、`Theme.Hellorename.Shim`（透明、无动画、禁用预览窗口），不是桌面入口；`onCreate` 把收到的 Intent 原样转发给 `MainActivity` 后立刻 `finish()`，界面与改名/保存逻辑完全不变。
+- **入口迁移**：`VIEW`、`SEND`、`SEND_MULTIPLE` 三条 filter 从 `MainActivity` 移到 `ShareActivity`，声明内容与 beta.2 逐字相同（VIEW 7 类 MIME + `content` scheme；SEND/SEND_MULTIPLE 一条 filter、7 类 MIME、无 scheme）。`MainActivity` 只保留 `MAIN/LAUNCHER`。
+- **QA 门禁**：`--view-shape savecopy` 现在要求 `MainActivity` 不再承载文件入口，`ShareActivity` 存在且 `exported/noHistory/excludeFromRecents` 均为 true，两条 filter 形状不变。
+- **版本号**：`versionName` 2.4.0-beta.3，`versionCode` 从 25 起（beta.2 实际 24，可直接覆盖安装）。
+
+### Testing
+- 新增 `fileEntries_resolveToShareActivity`：VIEW / SEND / SEND_MULTIPLE 都只解析到 `ShareActivity`，不再解析到 `MainActivity`。
+- 新增 `shareActivity_forwardsToMainActivity`：向 `ShareActivity` 发 VIEW，20s 内 `MainActivity` 必须收到并完成复制、显示原文件名。
+- JVM 88 条不变；API 36 instrumentation 20 → **22 条**。
+
+### Known
+- 这是“组件形态”实验：如果 `ShareActivity` 出现在面板里，说明 HyperOS 的过滤依据是入口组件形态；如果仍不出现，就可以排除 manifest/组件结构，转查 WorkBuddy 侧的 chooser 行为。
+
 ## [2.4.0-beta.2] - 2026-11-14
 
 beta.1 在目标应用里仍然不出现在候选列表，这一版把整个 manifest 入口面完全对齐 SaveCopy：不只 VIEW，SEND / SEND_MULTIPLE 也照搬。
